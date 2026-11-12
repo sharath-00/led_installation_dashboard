@@ -1,0 +1,139 @@
+name: Send LED Installation Mail Dashboard
+
+on:
+  # External webhook / API trigger:
+  # POST https://api.github.com/repos/<OWNER>/<REPO>/dispatches
+  # Body: {"event_type": "send-led-report", "client_payload": {"dry_run": false, "attach_csv": false, "note": ""}}
+  repository_dispatch:
+    types: [send-led-report]
+
+  # Manual / workflow API trigger:
+  # POST https://api.github.com/repos/<OWNER>/<REPO>/actions/workflows/send-led-report.yml/dispatches
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview HTML only without sending email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      attach_csv:
+        description: "Attach CSV summaries to email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      to:
+        description: "Optional comma-separated recipient override"
+        required: false
+        default: ""
+        type: string
+      note:
+        description: "Optional coordinator note"
+        required: false
+        default: ""
+        type: string
+
+  # Uncomment below if you also want an automatic daily send (09:00 AM IST = 03:30 UTC):
+  # schedule:
+  #   - cron: "30 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Kolkata
+
+jobs:
+  send-dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Prepare service account credentials
+        env:
+          SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python - << 'PY'
+          import os, pathlib, sys
+          sa = os.environ.get("SA_JSON", "").strip()
+          if not sa:
+              print("Error: GOOGLE_SERVICE_ACCOUNT_JSON secret is missing.", file=sys.stderr)
+              sys.exit(1)
+          pathlib.Path("service_account.json").write_text(sa, encoding="utf-8")
+          PY
+
+      - name: Run LED Mail Dashboard
+        env:
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+          GOOGLE_SHEET_URL_OR_ID: ${{ secrets.GOOGLE_SHEET_URL_OR_ID }}
+          GOOGLE_OVERALL_WORKSHEET: ${{ secrets.GOOGLE_OVERALL_WORKSHEET }}
+          GOOGLE_DAILY_WORKSHEET: ${{ secrets.GOOGLE_DAILY_WORKSHEET }}
+          GOOGLE_RAW_WORKSHEET: ${{ secrets.GOOGLE_RAW_WORKSHEET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
+          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
+          EMAIL_CC: ${{ secrets.EMAIL_CC }}
+          EMAIL_SUBJECT_TEMPLATE: ${{ secrets.EMAIL_SUBJECT_TEMPLATE }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
+          DISPATCH_ATTACH_CSV: ${{ github.event.inputs.attach_csv || github.event.client_payload.attach_csv || 'false' }}
+          DISPATCH_TO: ${{ github.event.inputs.to || github.event.client_payload.to || '' }}
+          DISPATCH_NOTE: ${{ github.event.inputs.note || github.event.client_payload.note || '' }}
+          DISPATCH_SHEET: ${{ github.event.client_payload.sheet || '' }}
+        run: |
+          python - << 'PY'
+          import os, subprocess, sys
+
+          cmd = [sys.executable, "send_report.py"]
+          if str(os.environ.get("DISPATCH_DRY_RUN", "")).strip().lower() in {"1", "true", "yes"}:
+              cmd.append("--dry-run")
+          if str(os.environ.get("DISPATCH_ATTACH_CSV", "")).strip().lower() in {"1", "true", "yes"}:
+              cmd.append("--attach-csv")
+
+          to_val = os.environ.get("DISPATCH_TO", "").strip()
+          if to_val:
+              cmd.extend(["--to", to_val])
+
+          note_val = os.environ.get("DISPATCH_NOTE", "").strip()
+          if note_val:
+              cmd.extend(["--note", note_val])
+
+          sheet_val = os.environ.get("DISPATCH_SHEET", "").strip()
+          if sheet_val:
+              cmd.extend(["--sheet", sheet_val])
+
+          raise SystemExit(subprocess.call(cmd))
+          PY
+
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
+
+      - name: Upload rendered HTML preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: led-mail-dashboard-html
+          path: output/latest_mail_dashboard.html
+          if-no-files-found: ignore
+          retention-days: 14
+

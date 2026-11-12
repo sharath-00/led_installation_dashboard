@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import smtplib
+from datetime import datetime, timedelta
+from email.message import EmailMessage
+from email.utils import formataddr
+
+import pandas as pd
+
+from src.analytics import LedAnalysis
+from src.config import EmailConfig
+
+
+def format_subject(
+    template: str,
+    analysis: LedAnalysis,
+    sheet_title: str = "LED Sheet",
+) -> str:
+    k = analysis.kpis
+    yesterday_fallback = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    yesterday_date_val = k.daily_date or yesterday_fallback
+    safe_vars = {
+        "overall_total": f"{k.overall_total:,}",
+        "daily_total": f"{k.daily_total:,}",
+        "yesterday_total": f"{k.daily_total:,}",
+        "daily_date": yesterday_date_val,
+        "yesterday_date": yesterday_date_val,
+        "overall_date": k.overall_date or yesterday_fallback,
+        "wards_count": f"{k.wards_count:,}",
+        "constituencies_count": f"{k.constituencies_count:,}",
+        "top_wattage": k.top_wattage,
+        "date": datetime.now().strftime("%d %b %Y"),
+        "sheet_title": sheet_title,
+    }
+    if not k.has_daily and ("{daily_total}" in template or "{yesterday_total}" in template):
+        return (
+            f"[LED Installation Report] {k.overall_total:,} Lamps Installed "
+            f"- {safe_vars['overall_date']}"
+        )
+    try:
+        return template.format(**safe_vars)
+    except Exception:
+        return (
+            f"[LED Installation Report] {k.overall_total:,} Lamps Installed "
+            f"- {safe_vars['date']}"
+        )
+
+
+def send_dashboard_email(
+    email_cfg: EmailConfig,
+    subject: str,
+    html_body: str,
+    plain_body: str,
+    *,
+    attachments: list[tuple[str, pd.DataFrame]] | None = None,
+) -> None:
+    if not email_cfg.sender_email:
+        raise ValueError("Sender email is required.")
+    if not email_cfg.smtp_password:
+        raise ValueError("SMTP password / Gmail App Password is required.")
+    if not email_cfg.recipients:
+        raise ValueError("At least one recipient email address is required.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((email_cfg.sender_name, email_cfg.sender_email))
+    msg["To"] = ", ".join(email_cfg.recipients)
+    if email_cfg.cc:
+        msg["Cc"] = ", ".join(email_cfg.cc)
+
+    msg.set_content(plain_body)
+    msg.add_alternative(html_body, subtype="html")
+
+    if attachments:
+        for filename, df in attachments:
+            if df is not None and not df.empty:
+                csv_bytes = df.to_csv(index=False).encode("utf-8")
+                msg.add_attachment(
+                    csv_bytes,
+                    maintype="text",
+                    subtype="csv",
+                    filename=filename,
+                )
+
+    all_recipients = list(dict.fromkeys(email_cfg.recipients + email_cfg.cc))
+
+    if email_cfg.smtp_port == 465 and not email_cfg.use_tls:
+        with smtplib.SMTP_SSL(email_cfg.smtp_host, email_cfg.smtp_port, timeout=30) as server:
+            server.login(email_cfg.sender_email, email_cfg.smtp_password)
+            server.send_message(msg, to_addrs=all_recipients)
+    else:
+        with smtplib.SMTP(email_cfg.smtp_host, email_cfg.smtp_port, timeout=30) as server:
+            server.ehlo()
+            if email_cfg.use_tls:
+                server.starttls()
+                server.ehlo()
+            server.login(email_cfg.sender_email, email_cfg.smtp_password)
+            server.send_message(msg, to_addrs=all_recipients)
