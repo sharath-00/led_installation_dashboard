@@ -404,7 +404,7 @@ def render_email_html(
     sent_date_short = sent_now.strftime("%d %b %Y")
     generated_at = sent_now.strftime("%d %b %Y, %I:%M %p")
     default_yesterday = (sent_now - timedelta(days=1)).strftime("%d/%m/%Y")
-    tab_parts = [t for t in (overall_tab, daily_tab, raw_tab) if t]
+    tab_parts = list(dict.fromkeys(t for t in (overall_tab, daily_tab, raw_tab) if t))
     tabs_label = " + ".join(tab_parts)
     yesterday_date_label = k.daily_date if k.has_daily else (k.overall_date or default_yesterday)
 
@@ -988,7 +988,7 @@ def render_email_plain_text(
     sent_now = datetime.now()
     default_yesterday = (sent_now - timedelta(days=1)).strftime("%d/%m/%Y")
     yesterday_date_label = k.daily_date if k.has_daily else (k.overall_date or default_yesterday)
-    tabs = " + ".join([t for t in (overall_tab, daily_tab, raw_tab) if t])
+    tabs = " + ".join(dict.fromkeys(t for t in (overall_tab, daily_tab, raw_tab) if t))
     lines = [
         f"{report_cfg.title}",
         f"Installed Date (Yesterday): {yesterday_date_label}",

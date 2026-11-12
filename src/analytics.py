@@ -299,6 +299,50 @@ class RawLampData:
     total_rows: int
     has_installed_by: bool
     has_dates: bool
+    full_df: pd.DataFrame = field(default_factory=pd.DataFrame)
+    raw_headers: list[str] = field(default_factory=list)
+
+
+_EMPTY_CELL_TOKENS = {
+    "",
+    "nan",
+    "none",
+    "null",
+    "#n/a",
+    "n/a",
+    "na",
+    "#ref!",
+    "#value!",
+    "#name?",
+    "#error!",
+    "#div/0!",
+    "-",
+}
+
+_CONSTITUENCY_TO_CORP_ZONE: dict[str, tuple[str, str]] = {
+    "cvramannagar": ("Central", "East"),
+    "shanthinagar": ("Central", "East"),
+    "shivajinagar": ("Central", "East"),
+    "hebbal": ("North", "East"),
+    "pulakeshinagar": ("North", "East"),
+    "sarvagnanagar": ("North", "East"),
+    "bommanahaliz1": ("South", "Bommanahali"),
+    "bommanahalliz1": ("South", "Bommanahali"),
+    "bommanahali": ("South", "Bommanahali"),
+    "bommanahalli": ("South", "Bommanahali"),
+}
+
+
+def _norm_geo_key(val: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (val or "").lower())
+
+
+def _resolve_corp_and_zone(region: str, constituency: str) -> tuple[str, str]:
+    key = _norm_geo_key(constituency)
+    if key in _CONSTITUENCY_TO_CORP_ZONE:
+        return _CONSTITUENCY_TO_CORP_ZONE[key]
+    reg_clean = (region or "").strip() or "Unspecified"
+    return reg_clean, reg_clean
 
 
 def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> RawLampData | None:
@@ -330,10 +374,24 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
     padded_rows = [list(r) + [""] * max(0, max_len - len(r)) for r in data_rows]
     padded_rows = [r[:max_len] for r in padded_rows]
 
-    # Deduplicate blank header columns cleanly
+    # Deduplicate blank header columns cleanly; expand merged "Photo", "", "" into Photo 1, Photo 2, Photo 3
+    export_headers: list[str] = list(raw_headers)
+    idx_h = 0
+    while idx_h < len(export_headers):
+        h_val = export_headers[idx_h]
+        if h_val.lower() == "photo" and idx_h + 1 < len(export_headers) and export_headers[idx_h + 1] == "":
+            span = 1
+            while idx_h + span < len(export_headers) and export_headers[idx_h + span] == "":
+                span += 1
+            for k in range(span):
+                export_headers[idx_h + k] = f"Photo {k + 1}"
+            idx_h += span
+            continue
+        idx_h += 1
+
     headers: list[str] = []
     seen: dict[str, int] = {}
-    for i, h in enumerate(raw_headers):
+    for i, h in enumerate(export_headers):
         name = h if h else f"Col_{i + 1}"
         if name in seen:
             seen[name] += 1
@@ -428,6 +486,18 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
     else:
         out["install_dt"] = pd.NaT
 
+    valid_mask = pd.Series(True, index=out.index)
+    if col_region:
+        valid_mask &= ~out["region"].str.strip().str.lower().isin(_EMPTY_CELL_TOKENS)
+    if col_zone:
+        valid_mask &= ~out["zone"].str.strip().str.lower().isin(_EMPTY_CELL_TOKENS)
+    if col_ward:
+        valid_mask &= ~out["ward"].str.strip().str.lower().isin(_EMPTY_CELL_TOKENS)
+    out = out[valid_mask].reset_index(drop=True)
+    if out.empty:
+        return None
+    full_df = raw_df.loc[valid_mask].reset_index(drop=True)
+
     has_installed_by = bool(col_installed_by and (out["installed_by"] != "").any())
     has_dates = bool(out["install_dt"].notna().any())
 
@@ -437,6 +507,8 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
         total_rows=len(out),
         has_installed_by=has_installed_by,
         has_dates=has_dates,
+        full_df=full_df,
+        raw_headers=headers,
     )
 
 
@@ -482,8 +554,13 @@ def build_parsed_sheets_from_raw(
             )
             .reset_index()
         )
-        piv = piv.rename(columns={"region": "Corporation", "zone": "Constituency", "ward": "Ward"})
-        piv["Zone"] = piv["Corporation"]
+        resolved = [
+            _resolve_corp_and_zone(str(reg), str(const))
+            for reg, const in zip(piv["region"], piv["zone"])
+        ]
+        piv["Corporation"] = [c for c, _ in resolved]
+        piv["Zone"] = [z for _, z in resolved]
+        piv = piv.rename(columns={"zone": "Constituency", "ward": "Ward"})
         for w in wattages:
             if w in piv.columns:
                 piv[f"{w}W"] = piv[w].astype(int)

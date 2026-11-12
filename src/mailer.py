@@ -6,10 +6,14 @@ from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid
 
+from typing import Union
+
 import pandas as pd
 
 from src.analytics import LedAnalysis
 from src.config import EmailConfig
+
+AttachmentPayload = Union[pd.DataFrame, bytes, bytearray]
 
 
 def _sender_domain(sender_email: str) -> str:
@@ -39,7 +43,7 @@ def build_dashboard_email_message(
     html_body: str,
     plain_body: str,
     *,
-    attachments: list[tuple[str, pd.DataFrame]] | None = None,
+    attachments: list[tuple[str, AttachmentPayload]] | None = None,
     thread_key: str = "",
 ) -> EmailMessage:
     if not email_cfg.sender_email:
@@ -69,9 +73,27 @@ def build_dashboard_email_message(
     msg.add_alternative(html_body, subtype="html")
 
     if attachments:
-        for filename, df in attachments:
-            if df is not None and not df.empty:
-                csv_bytes = df.to_csv(index=False).encode("utf-8")
+        for filename, payload in attachments:
+            if isinstance(payload, (bytes, bytearray)):
+                if len(payload) == 0:
+                    continue
+                if filename.lower().endswith(".xlsx"):
+                    maintype, subtype = (
+                        "application",
+                        "vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                elif filename.lower().endswith(".csv"):
+                    maintype, subtype = "text", "csv"
+                else:
+                    maintype, subtype = "application", "octet-stream"
+                msg.add_attachment(
+                    bytes(payload),
+                    maintype=maintype,
+                    subtype=subtype,
+                    filename=filename,
+                )
+            elif payload is not None and not payload.empty:
+                csv_bytes = payload.to_csv(index=False).encode("utf-8")
                 msg.add_attachment(
                     csv_bytes,
                     maintype="text",
@@ -123,7 +145,7 @@ def send_dashboard_email(
     html_body: str,
     plain_body: str,
     *,
-    attachments: list[tuple[str, pd.DataFrame]] | None = None,
+    attachments: list[tuple[str, AttachmentPayload]] | None = None,
     thread_key: str = "",
 ) -> None:
     if not email_cfg.sender_email:
@@ -145,11 +167,11 @@ def send_dashboard_email(
     all_recipients = list(dict.fromkeys(email_cfg.recipients + email_cfg.cc))
 
     if email_cfg.smtp_port == 465 and not email_cfg.use_tls:
-        with smtplib.SMTP_SSL(email_cfg.smtp_host, email_cfg.smtp_port, timeout=30) as server:
+        with smtplib.SMTP_SSL(email_cfg.smtp_host, email_cfg.smtp_port, timeout=120) as server:
             server.login(email_cfg.sender_email, email_cfg.smtp_password)
             server.send_message(msg, to_addrs=all_recipients)
     else:
-        with smtplib.SMTP(email_cfg.smtp_host, email_cfg.smtp_port, timeout=30) as server:
+        with smtplib.SMTP(email_cfg.smtp_host, email_cfg.smtp_port, timeout=120) as server:
             server.ehlo()
             if email_cfg.use_tls:
                 server.starttls()

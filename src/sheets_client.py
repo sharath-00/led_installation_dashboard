@@ -76,6 +76,16 @@ def _format_xlsx_cell(val: Any) -> str:
     return str(val).strip()
 
 
+def _xlsx_tab_names(xlsx_bytes: bytes) -> list[str]:
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
 def xlsx_bytes_to_grid(xlsx_bytes: bytes, worksheet_name: str = "") -> Tuple[list[list[str]], str, list[str]]:
     """Read a specific worksheet from raw .xlsx bytes into a 2D string grid cleanly."""
     import openpyxl
@@ -165,8 +175,7 @@ def list_worksheets(service_account_path: Path, spreadsheet_id_or_url: str) -> l
             raise
         entry = _fetch_drive_xlsx_entry(service_account_path, sheet_id)
         if entry["tab_names"] is None:
-            _, _, tab_names = xlsx_bytes_to_grid(entry["bytes"], "")
-            entry["tab_names"] = tab_names
+            entry["tab_names"] = _xlsx_tab_names(entry["bytes"])
         return list(entry["tab_names"])
 
 
@@ -218,7 +227,7 @@ def auto_pick_raw_tab(
     daily_tab: str = "",
 ) -> str:
     """Locate the raw lamp log tab (e.g. 'Sheet2', 'Lamp Report', 'Raw Data')."""
-    base_excluded = {overall_tab, daily_tab}
+    base_excluded = {t for t in (overall_tab, daily_tab) if t}
     non_summary = [t for t in tab_names if t not in base_excluded and "lamp installed" not in t.lower()]
     for kw in ("sheet2", "lamp report", "raw", "log", "detail", "master", "data"):
         for t in non_summary:
@@ -227,7 +236,11 @@ def auto_pick_raw_tab(
 
     excluded = base_excluded | set(find_all_daily_tabs(tab_names, overall_tab))
     candidates = [t for t in tab_names if t not in excluded]
-    return candidates[0] if candidates else ""
+    if candidates:
+        return candidates[0]
+    if non_summary:
+        return non_summary[0]
+    return tab_names[0] if tab_names else ""
 
 
 def auto_pick_tabs(

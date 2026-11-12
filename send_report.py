@@ -17,7 +17,8 @@ from src.analytics import (
 )
 from src.config import BASE_DIR, load_config
 from src.email_renderer import render_email_html, render_email_plain_text
-from src.mailer import format_subject, send_dashboard_email
+from src.excel_exporter import build_sheet2_excel_bytes
+from src.mailer import AttachmentPayload, format_subject, send_dashboard_email
 from src.sheets_client import (
     auto_pick_raw_tab,
     auto_pick_tabs,
@@ -26,6 +27,7 @@ from src.sheets_client import (
     filter_daily_tabs_upto,
     find_all_daily_tabs,
     get_sample_grids,
+    list_worksheets,
 )
 
 
@@ -60,21 +62,31 @@ def run_once(args: argparse.Namespace) -> int:
             raw_lamp_data = parse_raw_lamp_sheet(sample["Sheet2"], raw_tab_name)
     else:
         sa_path = cfg.google_sheet.resolved_service_account_path()
+        explicit_overall = (args.overall_tab or "").strip() or cfg.google_sheet.overall_worksheet.strip()
+        if explicit_overall:
+            target_tab = explicit_overall
+        else:
+            all_tabs = list_worksheets(sa_path, cfg.google_sheet.spreadsheet_id_or_url)
+            preferred_raw = (
+                (args.raw_tab.strip() if args.raw_tab and args.raw_tab.lower() != "none" else "")
+                or cfg.google_sheet.raw_worksheet.strip()
+                or auto_pick_raw_tab(all_tabs)
+            )
+            target_tab = preferred_raw
+
         ov_grid, sheet_title, resolved_ov_tab, all_tabs = fetch_raw_grid(
             sa_path,
             cfg.google_sheet.spreadsheet_id_or_url,
-            cfg.google_sheet.overall_worksheet,
+            target_tab,
         )
 
-        # Support case where overall_worksheet points directly to Sheet2 (raw log)
-        try:
-            overall_parsed = parse_led_matrix_grid(ov_grid, resolved_ov_tab)
-        except ValueError:
-            raw_lamp_data = parse_raw_lamp_sheet(ov_grid, resolved_ov_tab)
-            if raw_lamp_data is None:
-                raise
+        # Primary flow: parse raw Sheet2 lamp log directly into complete analytics
+        raw_lamp_data = parse_raw_lamp_sheet(ov_grid, resolved_ov_tab)
+        if raw_lamp_data is not None:
             raw_tab_name = resolved_ov_tab
             overall_parsed, daily_parsed = build_parsed_sheets_from_raw(raw_lamp_data)
+        else:
+            overall_parsed = parse_led_matrix_grid(ov_grid, resolved_ov_tab)
 
         dy_tab_name = cfg.google_sheet.daily_worksheet
         if args.daily_tab is None and not dy_tab_name:
@@ -185,14 +197,19 @@ def run_once(args: argparse.Namespace) -> int:
     if k.has_installers:
         print(f"Installers (Installed By): {k.active_installers_today} active yesterday / {k.total_installers} overall")
 
-    if args.open:
-        webbrowser.open(out_path.resolve().as_uri())
+    attachments: list[tuple[str, AttachmentPayload]] = []
+    if raw_lamp_data is not None and not args.no_attach_excel:
+        excel_name, excel_bytes, tab_counts = build_sheet2_excel_bytes(raw_lamp_data)
+        save_excel_name = f"sample_{excel_name}" if args.sample else excel_name
+        excel_out_path = BASE_DIR / "output" / save_excel_name
+        excel_out_path.write_bytes(excel_bytes)
+        tab_summary = ", ".join(f"{t}: {c:,}" for t, c in tab_counts.items())
+        print(
+            f"Saved Excel workbook to: {excel_out_path} "
+            f"({len(excel_bytes) / (1024 * 1024):.2f} MB | {len(tab_counts)} tabs -> {tab_summary})"
+        )
+        attachments.append((excel_name, excel_bytes))
 
-    if args.dry_run:
-        print("Dry-run mode enabled; email was not sent.")
-        return 0
-
-    attachments = []
     if args.attach_csv:
         if analysis.installer_analysis and not analysis.installer_analysis.top_installers_cumulative.empty:
             attachments.append(("installer_summary.csv", analysis.installer_analysis.top_installers_cumulative))
@@ -201,6 +218,13 @@ def run_once(args: argparse.Namespace) -> int:
             ("constituency_summary.csv", analysis.constituency_summary),
             ("ward_summary.csv", analysis.ward_summary),
         ])
+
+    if args.open:
+        webbrowser.open(out_path.resolve().as_uri())
+
+    if args.dry_run:
+        print("Dry-run mode enabled; email was not sent.")
+        return 0
 
     thread_key = (
         "sample"
@@ -232,6 +256,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Generate HTML dashboard locally without sending email")
     parser.add_argument("--open", action="store_true", help="Open generated HTML mail dashboard in your browser")
     parser.add_argument("--attach-csv", action="store_true", help="Attach Installer, Corporation, Constituency & Ward CSV summaries")
+    parser.add_argument("--no-attach-excel", action="store_true", help="Skip attaching the multi-tab Sheet2 Excel workbook")
     parser.add_argument("--no-top-wards", action="store_true", help="Exclude Top Wards card")
     parser.add_argument("--to", help="Override recipient email address(es), comma-separated")
     parser.add_argument(

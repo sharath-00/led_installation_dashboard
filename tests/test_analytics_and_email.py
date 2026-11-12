@@ -12,6 +12,7 @@ from src.analytics import (
 )
 from src.config import BASE_DIR, EmailConfig, ReportConfig
 from src.email_renderer import render_email_html, render_email_plain_text
+from src.excel_exporter import build_sheet2_excel_bytes
 from src.mailer import build_dashboard_email_message, format_subject
 from src.sheets_client import (
     auto_pick_raw_tab,
@@ -47,6 +48,8 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
             ["10.11.26- Lamp Installed", "11.11.26- Lamp Installed"],
         )
         self.assertEqual(auto_pick_raw_tab(tabs, ov, dy), "Sheet2")
+        self.assertEqual(auto_pick_raw_tab(["Sheet1", "Sheet2"]), "Sheet2")
+        self.assertEqual(auto_pick_raw_tab(["Sheet2"]), "Sheet2")
         self.assertEqual(
             auto_pick_raw_tab(
                 ["Overall till - 11.11.2026", "11.11.26- Lamp Installed", "Lamp Report 11.11.2026"],
@@ -310,20 +313,50 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
         # Replace exact headers with visually truncated ones like "Installe..." / "Installed I..."
         truncated_grid[0][16] = "Installe..."
         truncated_grid[0][17] = "Installed I..."
+        # Add an invalid lookup error row (#N/A / None) like live Sheet2 has; should be excluded cleanly
+        na_row = list(grids["Sheet2"][1])
+        na_row[0] = "#N/A"
+        na_row[1] = "#N/A"
+        na_row[2] = "None"
+        truncated_grid.append(na_row)
 
         raw_data = parse_raw_lamp_sheet(truncated_grid, "Sheet2")
         self.assertIsNotNone(raw_data)
         assert raw_data is not None
         self.assertTrue(raw_data.has_installed_by)
         self.assertTrue(raw_data.has_dates)
+        self.assertEqual(raw_data.total_rows, 32)
 
         ov_ps, dy_ps = build_parsed_sheets_from_raw(raw_data, reference_today=date(2026, 11, 12))
         self.assertEqual(ov_ps.source_table_type, "raw_log")
         self.assertEqual(ov_ps.parsed_total, 32)
+        self.assertEqual(set(ov_ps.ward_df["Corporation"]), {"Central", "North", "South"})
+        self.assertEqual(set(ov_ps.ward_df["Zone"]), {"East", "Bommanahali"})
         self.assertIsNotNone(dy_ps)
         assert dy_ps is not None
         self.assertEqual(dy_ps.report_date, "11/11/2026")
         self.assertEqual(dy_ps.parsed_total, 21)
+
+        sheet2_analysis = analyze_led_sheets(ov_ps, dy_ps, raw_lamp_data=raw_data, reference_today=date(2026, 11, 12))
+        self.assertEqual(sheet2_analysis.kpis.corporations_count, 3)
+        self.assertEqual(sheet2_analysis.kpis.zones_count, 2)
+        self.assertEqual(sheet2_analysis.kpis.daily_total, 21)
+        self.assertTrue(sheet2_analysis.kpis.has_history)
+        self.assertTrue(sheet2_analysis.kpis.has_installers)
+        html = render_email_html(
+            sheet2_analysis,
+            ReportConfig(),
+            sheet_title="LED Workbook",
+            overall_tab="Sheet2",
+            daily_tab="",
+            raw_tab="Sheet2",
+        )
+        self.assertIn("(Sheet2, 32 lamps)", html)
+        self.assertNotIn("Sheet2 + Sheet2", html)
+        self.assertIn("Corporation Summary Matrix", html)
+        self.assertIn("Central", html)
+        self.assertIn("North", html)
+        self.assertIn("South", html)
 
         # Even if Sheet2 has partial entries logged for today (12-11-2026), report sent today targets yesterday (11-11-2026)
         with_today_grid = [list(r) for r in grids["Sheet2"]]
@@ -373,6 +406,86 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
         assert raw_s2 is not None
         self.assertEqual(int(raw_s2.df["wattage"].iloc[0]), 56)
         self.assertEqual(raw_s2.df["install_dt"].iloc[0].strftime("%d/%m/%Y"), "11/11/2026")
+
+    def test_sheet2_excel_export_and_email_attachment(self) -> None:
+        import io
+        import openpyxl
+
+        grids = get_sample_grids()
+        raw_grid = [list(r) for r in grids["Sheet2"]]
+        # Include one future row (today = 12-11-2026) and one invalid #N/A row; neither should pollute yesterday's report
+        today_row = list(grids["Sheet2"][1])
+        today_row[17] = "12-11-2026"
+        na_row = list(grids["Sheet2"][1])
+        na_row[0], na_row[1], na_row[2] = "#N/A", "#N/A", "None"
+        raw_grid.extend([today_row, na_row])
+
+        raw_data = parse_raw_lamp_sheet(raw_grid, "Sheet2")
+        assert raw_data is not None
+        xlsx_name, xlsx_bytes, tab_counts = build_sheet2_excel_bytes(
+            raw_data,
+            reference_today=date(2026, 11, 12),
+        )
+        self.assertEqual(xlsx_name, "LED_Installations_11-11-2026.xlsx")
+        self.assertEqual(tab_counts["Overall Data"], 32)
+        self.assertEqual(tab_counts["Yesterday (11-11-2026)"], 21)
+
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), read_only=True, data_only=True)
+        try:
+            self.assertEqual(wb.sheetnames[0], "Overall Data")
+            self.assertEqual(wb.sheetnames[1], "Yesterday (11-11-2026)")
+            const_tabs = wb.sheetnames[2:]
+            self.assertEqual(
+                set(const_tabs),
+                {
+                    "Bommanahali - Z1",
+                    "PulakeshiNagar",
+                    "SarvagnaNagar",
+                    "ShivajiNagar",
+                    "Hebbal",
+                    "ShanthiNagar",
+                    "CVRamanNagar",
+                },
+            )
+            ws_all = wb["Overall Data"]
+            all_rows = list(ws_all.iter_rows(values_only=True))
+            self.assertEqual(len(all_rows), 33)  # header + 32 valid cumulative rows
+            ws_y = wb["Yesterday (11-11-2026)"]
+            y_rows = list(ws_y.iter_rows(values_only=True))
+            self.assertEqual(len(y_rows), 22)  # header + 21 installs
+            self.assertEqual(
+                list(y_rows[0]),
+                [
+                    "Region", "Zone", "Ward", "Pole ID", "Location", "Pole Type", "Pole Arm",
+                    "Connection Type", "Lamp ID", "Photo 1", "Photo 2", "Photo 3", "Type", "Wattage",
+                    "Manufacturer", "Batch", "Installed By", "Installed On", "Replaced",
+                    "Latitude", "Longitude",
+                ],
+            )
+            total_const_rows = sum(
+                len(list(wb[t].iter_rows(values_only=True))) - 1
+                for t in const_tabs
+            )
+            self.assertEqual(total_const_rows, 32)
+        finally:
+            wb.close()
+
+        msg = build_dashboard_email_message(
+            EmailConfig(sender_email="reports@example.com", recipients=["ops@example.com"]),
+            subject="[LED Installation Report] Daily Lamp Installation Dashboard",
+            html_body="<p>Hi</p>",
+            plain_body="Hi",
+            attachments=[(xlsx_name, xlsx_bytes)],
+            thread_key="sheet-id",
+        )
+        atts = list(msg.iter_attachments())
+        self.assertEqual(len(atts), 1)
+        self.assertEqual(atts[0].get_filename(), "LED_Installations_11-11-2026.xlsx")
+        self.assertEqual(
+            atts[0].get_content_type(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertGreater(len(atts[0].get_payload(decode=True)), 1000)
 
 
 if __name__ == "__main__":
