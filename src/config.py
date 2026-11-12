@@ -45,9 +45,9 @@ class EmailConfig:
     smtp_password: str = ""
     recipients: list[str] = field(default_factory=list)
     cc: list[str] = field(default_factory=list)
-    subject_template: str = (
-        "[LED Installation Report] {overall_total} Lamps Installed | Yesterday +{yesterday_total} ({yesterday_date})"
-    )
+    subject_template: str = "[LED Installation Report] Daily Lamp Installation Dashboard"
+    thread_enabled: bool = True
+    thread_id: str = ""
 
 
 @dataclass
@@ -131,6 +131,13 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     raw_pw = str(_env_or("SMTP_PASSWORD", ""))
     smtp_password = raw_pw.replace(" ", "") if "gmail" in str(smtp_host).lower() else raw_pw
 
+    thread_env = _env_or("EMAIL_THREAD_ENABLED", None)
+    thread_enabled = (
+        str(thread_env).strip().lower() in {"1", "true", "yes"}
+        if thread_env is not None
+        else bool(em_raw.get("thread_enabled", True))
+    )
+
     email = EmailConfig(
         smtp_host=smtp_host,
         smtp_port=int(_env_or("SMTP_PORT", em_raw.get("smtp_port", 587))),
@@ -153,9 +160,11 @@ def load_config(config_path: Path | None = None) -> AppConfig:
             "EMAIL_SUBJECT_TEMPLATE",
             em_raw.get(
                 "subject_template",
-                "[LED Installation Report] {overall_total} Lamps Installed | Yesterday +{yesterday_total} ({yesterday_date})",
+                "[LED Installation Report] Daily Lamp Installation Dashboard",
             ),
         ),
+        thread_enabled=thread_enabled,
+        thread_id=str(_env_or("EMAIL_THREAD_ID", em_raw.get("thread_id", "")) or "").strip(),
     )
 
     return AppConfig(
@@ -189,6 +198,8 @@ def save_config(cfg: AppConfig, config_path: Path | None = None) -> None:
             "recipients": cfg.email.recipients,
             "cc": cfg.email.cc,
             "subject_template": cfg.email.subject_template,
+            "thread_enabled": cfg.email.thread_enabled,
+            "thread_id": cfg.email.thread_id,
         },
     }
     with path.open("w", encoding="utf-8") as f:

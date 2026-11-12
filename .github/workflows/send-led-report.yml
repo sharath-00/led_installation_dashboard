@@ -94,6 +94,8 @@ jobs:
           EMAIL_RECIPIENTS: ${{ secrets.EMAIL_RECIPIENTS }}
           EMAIL_CC: ${{ secrets.EMAIL_CC }}
           EMAIL_SUBJECT_TEMPLATE: ${{ secrets.EMAIL_SUBJECT_TEMPLATE }}
+          EMAIL_THREAD_ENABLED: ${{ secrets.EMAIL_THREAD_ENABLED }}
+          EMAIL_THREAD_ID: ${{ secrets.EMAIL_THREAD_ID }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
           DISPATCH_ATTACH_CSV: ${{ github.event.inputs.attach_csv || github.event.client_payload.attach_csv || 'false' }}
           DISPATCH_TO: ${{ github.event.inputs.to || github.event.client_payload.to || '' }}

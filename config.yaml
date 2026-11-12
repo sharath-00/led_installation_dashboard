@@ -18,4 +18,6 @@ email:
   sender_email: ""
   recipients: []
   cc: []
-  subject_template: "[LED Installation Report] {overall_total} Lamps Installed | Yesterday +{yesterday_total} ({yesterday_date})"
+  subject_template: "[LED Installation Report] Daily Lamp Installation Dashboard"
+  thread_enabled: true
+  thread_id: ""

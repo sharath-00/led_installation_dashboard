@@ -21,6 +21,7 @@ from src.mailer import format_subject, send_dashboard_email
 from src.sheets_client import (
     auto_pick_raw_tab,
     auto_pick_tabs,
+    extract_spreadsheet_id,
     fetch_raw_grid,
     filter_daily_tabs_upto,
     find_all_daily_tabs,
@@ -201,12 +202,18 @@ def run_once(args: argparse.Namespace) -> int:
             ("ward_summary.csv", analysis.ward_summary),
         ])
 
+    thread_key = (
+        "sample"
+        if args.sample
+        else extract_spreadsheet_id(cfg.google_sheet.spreadsheet_id_or_url)
+    )
     send_dashboard_email(
         cfg.email,
         subject=subject,
         html_body=html_body,
         plain_body=plain_body,
         attachments=attachments or None,
+        thread_key=thread_key,
     )
     print(f"Email successfully sent to: {', '.join(cfg.email.recipients)}")
     return 0

@@ -12,7 +12,7 @@ from src.analytics import (
 )
 from src.config import BASE_DIR, EmailConfig, ReportConfig
 from src.email_renderer import render_email_html, render_email_plain_text
-from src.mailer import format_subject
+from src.mailer import build_dashboard_email_message, format_subject
 from src.sheets_client import (
     auto_pick_raw_tab,
     auto_pick_tabs,
@@ -246,8 +246,33 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
         default_subj = format_subject(EmailConfig().subject_template, analysis)
         self.assertEqual(
             default_subj,
-            "[LED Installation Report] 54,493 Lamps Installed | Yesterday +21 (11/11/2026)",
+            "[LED Installation Report] Daily Lamp Installation Dashboard",
         )
+
+        # Verify thread-mail RFC headers + stable thread ID per sheet
+        cfg_mail = EmailConfig(
+            sender_email="reports@example.com",
+            recipients=["ops@example.com"],
+        )
+        msg1 = build_dashboard_email_message(
+            cfg_mail,
+            subject=default_subj,
+            html_body=html,
+            plain_body=plain,
+            thread_key="test-sheet-123",
+        )
+        msg2 = build_dashboard_email_message(
+            cfg_mail,
+            subject=default_subj,
+            html_body=html,
+            plain_body=plain,
+            thread_key="test-sheet-123",
+        )
+        self.assertEqual(msg1["In-Reply-To"], "<led-dashboard-test-sheet-123@example.com>")
+        self.assertEqual(msg1["In-Reply-To"], msg2["In-Reply-To"])
+        self.assertEqual(msg1["References"], msg2["References"])
+        self.assertEqual(msg1["Thread-Topic"], "[LED Installation Report] Daily Lamp Installation Dashboard")
+        self.assertNotEqual(msg1["Message-ID"], msg2["Message-ID"])
 
         self.assertNotIn("Installed By Performance Summary", html)
         self.assertNotIn("today", html.lower())
