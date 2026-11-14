@@ -32,6 +32,11 @@ on:
         required: false
         default: ""
         type: string
+      cc:
+        description: "Optional comma-separated CC recipient override"
+        required: false
+        default: ""
+        type: string
       target_date:
         description: "Optional target date (DD-MM-YYYY or YYYY-MM-DD)"
         required: false
@@ -104,6 +109,7 @@ jobs:
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
           DISPATCH_ATTACH_CSV: ${{ github.event.inputs.attach_csv || github.event.client_payload.attach_csv || 'false' }}
           DISPATCH_TO: ${{ github.event.inputs.to || github.event.client_payload.to || '' }}
+          DISPATCH_CC: ${{ github.event.inputs.cc || github.event.client_payload.cc || '' }}
           DISPATCH_TARGET_DATE: ${{ github.event.inputs.target_date || github.event.client_payload.target_date || '' }}
           DISPATCH_NOTE: ${{ github.event.inputs.note || github.event.client_payload.note || '' }}
           DISPATCH_SHEET: ${{ github.event.client_payload.sheet || '' }}
@@ -120,6 +126,10 @@ jobs:
           to_val = os.environ.get("DISPATCH_TO", "").strip()
           if to_val:
               cmd.extend(["--to", to_val])
+
+          cc_val = os.environ.get("DISPATCH_CC", "").strip()
+          if cc_val:
+              cmd.extend(["--cc", cc_val])
 
           target_date_val = os.environ.get("DISPATCH_TARGET_DATE", "").strip()
           if target_date_val:

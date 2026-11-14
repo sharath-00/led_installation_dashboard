@@ -37,6 +37,8 @@ def run_once(args: argparse.Namespace) -> int:
         cfg.google_sheet.spreadsheet_id_or_url = args.sheet
     if args.to:
         cfg.email.recipients = [x.strip() for x in args.to.split(",") if x.strip()]
+    if getattr(args, "cc", None):
+        cfg.email.cc = [x.strip() for x in args.cc.split(",") if x.strip()]
     if args.overall_tab:
         cfg.google_sheet.overall_worksheet = args.overall_tab
     if args.daily_tab is not None:
@@ -258,7 +260,8 @@ def run_once(args: argparse.Namespace) -> int:
         attachments=attachments or None,
         thread_key=thread_key,
     )
-    print(f"Email successfully sent to: {', '.join(cfg.email.recipients)}")
+    cc_info = f" (CC: {', '.join(cfg.email.cc)})" if cfg.email.cc else ""
+    print(f"Email successfully sent to: {', '.join(cfg.email.recipients)}{cc_info}")
     return 0
 
 
@@ -279,6 +282,7 @@ def main() -> int:
     parser.add_argument("--no-attach-excel", action="store_true", help="Skip attaching the multi-tab Sheet2 Excel workbook")
     parser.add_argument("--no-top-wards", action="store_true", help="Exclude Top Wards card")
     parser.add_argument("--to", help="Override recipient email address(es), comma-separated")
+    parser.add_argument("--cc", help="Override CC email address(es), comma-separated")
     parser.add_argument(
         "--daily-at",
         help="Optional 24-hour time (HH:MM, e.g. 19:00) to run continuously and send daily",
