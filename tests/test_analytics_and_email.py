@@ -9,6 +9,7 @@ from src.analytics import (
     build_parsed_sheets_from_raw,
     parse_led_matrix_grid,
     parse_raw_lamp_sheet,
+    parse_smart_install_date,
 )
 from src.config import BASE_DIR, EmailConfig, ReportConfig
 from src.email_renderer import render_email_html, render_email_plain_text
@@ -486,6 +487,35 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         self.assertGreater(len(atts[0].get_payload(decode=True)), 1000)
+
+    def test_parse_smart_install_date(self) -> None:
+        import pandas as pd
+        sample_dates = pd.Series([
+            "13-11-2026",
+            "30-01-2026",
+            "2026-11-13",
+            "11/12/2026",  # November 12th in Sheet2 slashed format
+            "11/11/2026",  # November 11th
+            "25/11/2026",  # Part 1 > 12 -> 25 Nov
+            "02/14/2026",  # Part 2 > 12 -> 14 Feb
+            "",
+            "NaN",
+            "-",
+            None,
+        ])
+        parsed = parse_smart_install_date(sample_dates)
+        self.assertEqual(parsed.iloc[0], pd.Timestamp(2026, 11, 13))
+        self.assertEqual(parsed.iloc[1], pd.Timestamp(2026, 1, 30))
+        self.assertEqual(parsed.iloc[2], pd.Timestamp(2026, 11, 13))
+        self.assertEqual(parsed.iloc[3], pd.Timestamp(2026, 11, 12))  # Nov 12, not Dec 11!
+        self.assertEqual(parsed.iloc[4], pd.Timestamp(2026, 11, 11))
+        self.assertEqual(parsed.iloc[5], pd.Timestamp(2026, 11, 25))
+        self.assertEqual(parsed.iloc[6], pd.Timestamp(2026, 2, 14))
+        self.assertTrue(pd.isna(parsed.iloc[7]))
+        self.assertTrue(pd.isna(parsed.iloc[8]))
+        self.assertTrue(pd.isna(parsed.iloc[9]))
+        self.assertTrue(pd.isna(parsed.iloc[10]))
+
 
 
 if __name__ == "__main__":

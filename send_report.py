@@ -44,6 +44,19 @@ def run_once(args: argparse.Namespace) -> int:
     if args.raw_tab is not None:
         cfg.google_sheet.raw_worksheet = "" if args.raw_tab.lower() == "none" else args.raw_tab
 
+    target_date_obj: date | None = None
+    if getattr(args, "target_date", None):
+        import re
+        td_str = str(args.target_date).strip()
+        m = re.match(r"^(\d{1,4})[-/.](\d{1,2})[-/.](\d{1,4})$", td_str)
+        if m:
+            p1, p2, p3 = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if p1 > 1000:
+                target_date_obj = date(p1, p2, p3)
+            else:
+                y = p3 if p3 > 1000 else (2000 + p3 if p3 < 100 else p3)
+                target_date_obj = date(y, p2, p1)
+
     daily_parsed = None
     historical_daily_sheets = []
     raw_lamp_data = None
@@ -84,7 +97,10 @@ def run_once(args: argparse.Namespace) -> int:
         raw_lamp_data = parse_raw_lamp_sheet(ov_grid, resolved_ov_tab)
         if raw_lamp_data is not None:
             raw_tab_name = resolved_ov_tab
-            overall_parsed, daily_parsed = build_parsed_sheets_from_raw(raw_lamp_data)
+            overall_parsed, daily_parsed = build_parsed_sheets_from_raw(
+                raw_lamp_data,
+                target_date=target_date_obj,
+            )
         else:
             overall_parsed = parse_led_matrix_grid(ov_grid, resolved_ov_tab)
 
@@ -199,7 +215,10 @@ def run_once(args: argparse.Namespace) -> int:
 
     attachments: list[tuple[str, AttachmentPayload]] = []
     if raw_lamp_data is not None and not args.no_attach_excel:
-        excel_name, excel_bytes, tab_counts = build_sheet2_excel_bytes(raw_lamp_data)
+        excel_name, excel_bytes, tab_counts = build_sheet2_excel_bytes(
+            raw_lamp_data,
+            target_date=target_date_obj,
+        )
         save_excel_name = f"sample_{excel_name}" if args.sample else excel_name
         excel_out_path = BASE_DIR / "output" / save_excel_name
         excel_out_path.write_bytes(excel_bytes)
@@ -251,6 +270,7 @@ def main() -> int:
     parser.add_argument("--overall-tab", help="Override Overall cumulative worksheet tab name")
     parser.add_argument("--daily-tab", help="Override Daily installed worksheet tab name (pass 'none' to skip)")
     parser.add_argument("--raw-tab", help="Override Sheet2 raw log tab name for Installed By analytics (pass 'none' to skip)")
+    parser.add_argument("--target-date", help="Optional target date (DD-MM-YYYY or YYYY-MM-DD) to run the report for (defaults to yesterday / latest date)")
     parser.add_argument("--note", default="", help="Optional coordinator note to include at the top of the mail")
     parser.add_argument("--sample", action="store_true", help="Use built-in sample LED snapshot instead of Google Sheets")
     parser.add_argument("--dry-run", action="store_true", help="Generate HTML dashboard locally without sending email")

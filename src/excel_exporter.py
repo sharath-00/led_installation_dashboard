@@ -178,6 +178,7 @@ def build_sheet2_excel_bytes(
     raw_data: RawLampData,
     *,
     reference_today: date | None = None,
+    target_date: date | None = None,
 ) -> tuple[str, bytes, dict[str, int]]:
     """Build an .xlsx workbook from Sheet2: Tab 1 Overall Data, Tab 2 Yesterday, Tabs 3..N one per Constituency."""
     if raw_data is None or raw_data.df.empty:
@@ -187,11 +188,14 @@ def build_sheet2_excel_bytes(
     full_df = raw_data.full_df if not raw_data.full_df.empty else meta_df
     headers = list(full_df.columns) if not full_df.empty else list(raw_data.raw_headers)
 
-    target_dt = (
-        _pick_yesterday_target_dt(meta_df["install_dt"], reference_today=reference_today)
-        if raw_data.has_dates
-        else pd.NaT
-    )
+    if target_date is not None:
+        target_dt = pd.Timestamp(target_date)
+    else:
+        target_dt = (
+            _pick_yesterday_target_dt(meta_df["install_dt"], reference_today=reference_today)
+            if raw_data.has_dates
+            else pd.NaT
+        )
 
     if pd.notna(target_dt):
         dt_norm = meta_df["install_dt"].dt.normalize()

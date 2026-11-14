@@ -345,6 +345,69 @@ def _resolve_corp_and_zone(region: str, constituency: str) -> tuple[str, str]:
     return reg_clean, reg_clean
 
 
+def parse_smart_install_date(series: pd.Series) -> pd.Series:
+    """Robust parser for mixed date formats in Sheet2.
+
+    Handles:
+    - Hyphenated dates: 'DD-MM-YYYY' (e.g. 13-11-2026, 30-01-2026) or 'YYYY-MM-DD'
+    - Slashed dates:
+      * If part 1 > 12: 'DD/MM/YYYY' (day=part1, month=part2)
+      * If part 2 > 12: 'MM/DD/YYYY' (month=part1, day=part2)
+      * If both <= 12: standard spreadsheet slashed format is 'MM/DD/YYYY' (e.g. 11/12/2026 -> 12 Nov 2026)
+    - Timestamps, NaN, empty strings, and pd.Timestamp objects
+    """
+    def _parse(val: object):
+        if val is None or pd.isna(val):
+            return pd.NaT
+        if isinstance(val, (pd.Timestamp, pd.DatetimeIndex)):
+            return pd.Timestamp(val)
+        v = str(val).strip()
+        if not v or v.lower() in ("", "nan", "none", "null", "nat", "-"):
+            return pd.NaT
+
+        date_part = v.split()[0]
+
+        # Hyphenated: DD-MM-YYYY or YYYY-MM-DD
+        m_hy = re.match(r"^(\d{1,4})-(\d{1,2})-(\d{1,4})$", date_part)
+        if m_hy:
+            p1, p2, p3 = int(m_hy.group(1)), int(m_hy.group(2)), int(m_hy.group(3))
+            if p1 > 1000:
+                try:
+                    return pd.Timestamp(year=p1, month=p2, day=p3)
+                except ValueError:
+                    return pd.NaT
+            y = p3 if p3 > 1000 else (2000 + p3 if p3 < 100 else p3)
+            try:
+                return pd.Timestamp(year=y, month=p2, day=p1)
+            except ValueError:
+                return pd.NaT
+
+        # Slashed: DD/MM/YYYY or MM/DD/YYYY
+        m_sl = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{2,4})$", date_part)
+        if m_sl:
+            p1, p2, p3 = int(m_sl.group(1)), int(m_sl.group(2)), int(m_sl.group(3))
+            y = p3 if p3 > 1000 else (2000 + p3 if p3 < 100 else p3)
+            if p1 > 12:
+                try:
+                    return pd.Timestamp(year=y, month=p2, day=p1)
+                except ValueError:
+                    return pd.NaT
+            if p2 > 12:
+                try:
+                    return pd.Timestamp(year=y, month=p1, day=p2)
+                except ValueError:
+                    return pd.NaT
+            # Ambiguous (both <= 12): in Excel/Sheets, slashed format is MM/DD/YYYY
+            try:
+                return pd.Timestamp(year=y, month=p1, day=p2)
+            except ValueError:
+                return pd.NaT
+
+        return pd.to_datetime(v, dayfirst=False, errors="coerce")
+
+    return series.apply(_parse)
+
+
 def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> RawLampData | None:
     """Parse row-level Sheet2 lamp log (Region, Zone, Ward, Pole Type, Connection, Lamp ID, Photo, Type, Wattage, Installed By, Installed On, Replaced...)."""
     if not grid or len(grid) < 2:
@@ -413,6 +476,11 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
         return None
 
     col_region = _find_col(("region", "corporation", "division"), ("reg", "corp"))
+    if not col_region and len(headers) > 0:
+        first_col = headers[0]
+        sample_vals = raw_df[first_col].astype(str).str.strip().str.lower()
+        if sample_vals.isin({"east", "bommanahali", "bommanahalli", "north", "south", "central"}).mean() >= 0.5:
+            col_region = first_col
     col_zone = _find_col(("zone", "constituency"), ("zon", "constit"))
     col_ward = _find_col(("ward",), ("ward",))
     col_pole_type = _find_col(("pole type", "pole_type", "pole ty"), ("pole ty", "pole_ty"))
@@ -440,7 +508,7 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
             sample = raw_df[col].astype(str).str.strip()
             sample = sample[sample != ""].head(50)
             if not sample.empty:
-                parsed_sample = pd.to_datetime(sample, dayfirst=True, format="mixed", errors="coerce")
+                parsed_sample = parse_smart_install_date(sample)
                 if parsed_sample.notna().mean() >= 0.5:
                     col_installed_on = col_installed_on or col
                     continue
@@ -451,7 +519,7 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
         sample = raw_df[col].astype(str).str.strip()
         sample = sample[sample != ""].head(50)
         if not sample.empty:
-            parsed_sample = pd.to_datetime(sample, dayfirst=True, format="mixed", errors="coerce")
+            parsed_sample = parse_smart_install_date(sample)
             if parsed_sample.notna().mean() >= 0.5:
                 col_installed_on = col_installed_on or col
             else:
@@ -477,12 +545,7 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
     out["replaced"] = raw_df[col_replaced].astype(str).str.strip() if col_replaced else ""
 
     if col_installed_on:
-        out["install_dt"] = pd.to_datetime(
-            raw_df[col_installed_on].astype(str).str.strip(),
-            dayfirst=True,
-            format="mixed",
-            errors="coerce",
-        )
+        out["install_dt"] = parse_smart_install_date(raw_df[col_installed_on])
     else:
         out["install_dt"] = pd.NaT
 
@@ -534,6 +597,7 @@ def build_parsed_sheets_from_raw(
     raw_data: RawLampData,
     *,
     reference_today: date | None = None,
+    target_date: date | None = None,
 ) -> tuple[ParsedSheet, ParsedSheet | None]:
     """Synthesize Overall and Yesterday ParsedSheet objects directly from Sheet2 when summary tabs aren't used."""
     df = raw_data.df.copy()
@@ -570,7 +634,10 @@ def build_parsed_sheets_from_raw(
         piv["Total Lamps"] = piv[w_cols].sum(axis=1).astype(int)
         return piv[["Corporation", "Zone", "Constituency", "Ward", *w_cols, "Total Lamps"]]
 
-    latest_dt = _pick_yesterday_target_dt(df["install_dt"], reference_today=reference_today) if raw_data.has_dates else pd.NaT
+    if target_date is not None:
+        latest_dt = pd.Timestamp(target_date)
+    else:
+        latest_dt = _pick_yesterday_target_dt(df["install_dt"], reference_today=reference_today) if raw_data.has_dates else pd.NaT
     if pd.notna(latest_dt):
         ov_sub = df[df["install_dt"].isna() | (df["install_dt"].dt.normalize() <= latest_dt.normalize())]
     else:
