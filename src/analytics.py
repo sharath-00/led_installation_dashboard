@@ -552,6 +552,36 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
     else:
         out["install_dt"] = pd.NaT
 
+    # Heal missing/empty zone, ward, and region if Location or Pole ID has hints
+    empty_zone_mask = out["zone"].astype(str).str.strip().str.lower().isin(_EMPTY_CELL_TOKENS)
+    if empty_zone_mask.any():
+        for idx in out[empty_zone_mask].index:
+            loc = str(raw_df.at[idx, col_location]).lower() if col_location else ""
+            pole = str(raw_df.at[idx, col_pole_id]).lower() if col_pole_id else ""
+            if "shivaji" in loc or "svjr" in pole:
+                out.at[idx, "zone"] = "ShivajiNagar"
+                out.at[idx, "region"] = "East"
+                if "119" in pole or "119" in loc:
+                    out.at[idx, "ward"] = "SVJR-W119"
+            elif "sarvagna" in loc or "sn-" in pole:
+                out.at[idx, "zone"] = "SarvagnaNagar"
+                out.at[idx, "region"] = "East"
+            elif "pulakeshi" in loc or "pn-" in pole:
+                out.at[idx, "zone"] = "PulakeshiNagar"
+                out.at[idx, "region"] = "East"
+            elif "hebbal" in loc or "hbl" in pole:
+                out.at[idx, "zone"] = "Hebbal"
+                out.at[idx, "region"] = "East"
+            elif "shanthi" in loc or "snr" in pole:
+                out.at[idx, "zone"] = "ShanthiNagar"
+                out.at[idx, "region"] = "East"
+            elif "raman" in loc or "cvr" in pole:
+                out.at[idx, "zone"] = "CVRamanNagar"
+                out.at[idx, "region"] = "East"
+            elif "bommanahali" in loc or "bmh" in pole:
+                out.at[idx, "zone"] = "Bommanahali - Z1"
+                out.at[idx, "region"] = "Bommanahali"
+
     valid_mask = pd.Series(True, index=out.index)
     if col_region:
         valid_mask &= ~out["region"].str.strip().str.lower().isin(_EMPTY_CELL_TOKENS)
