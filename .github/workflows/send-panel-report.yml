@@ -5,7 +5,7 @@ on:
   # POST https://api.github.com/repos/<OWNER>/<REPO>/dispatches
   # Body: {"event_type": "send-panel-report", "client_payload": {"dry_run": false, "target_date": "", "tab": "PANEL REPORT", "note": ""}}
   repository_dispatch:
-    types: [send-panel-report]
+    types: [send-panel-report, send-all-reports, send-both-reports]
 
   # Manual / workflow dispatch trigger from GitHub Actions UI or GitHub CLI:
   workflow_dispatch:

@@ -5,7 +5,7 @@ on:
   # POST https://api.github.com/repos/<OWNER>/<REPO>/dispatches
   # Body: {"event_type": "send-led-report", "client_payload": {"dry_run": false, "attach_csv": false, "note": ""}}
   repository_dispatch:
-    types: [send-led-report]
+    types: [send-led-report, send-all-reports, send-both-reports]
 
   # Manual / workflow API trigger:
   # POST https://api.github.com/repos/<OWNER>/<REPO>/actions/workflows/send-led-report.yml/dispatches
