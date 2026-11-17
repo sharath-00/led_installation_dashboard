@@ -11,7 +11,7 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from src.analytics import RawLampData, _pick_yesterday_target_dt
+from src.analytics import PanelAnalysis, RawLampData, RawPanelData, _pick_yesterday_target_dt
 
 
 _INVALID_SHEET_CHARS = re.compile(r"[:\\/?*\[\]]+")
@@ -179,8 +179,9 @@ def build_sheet2_excel_bytes(
     *,
     reference_today: date | None = None,
     target_date: date | None = None,
+    raw_panel_data: RawPanelData | None = None,
 ) -> tuple[str, bytes, dict[str, int]]:
-    """Build an .xlsx workbook from Sheet2: Tab 1 Overall Data, Tab 2 Yesterday, Tabs 3..N one per Constituency."""
+    """Build an .xlsx workbook from Sheet2 & Panels: Tab 1 Overall Data, Tab 2 Yesterday, Tabs 3..N per Constituency, plus Panels."""
     if raw_data is None or raw_data.df.empty:
         raise ValueError("Cannot build Excel workbook: Sheet2 data is empty.")
 
@@ -240,6 +241,175 @@ def build_sheet2_excel_bytes(
         c_title = _safe_sheet_title(str(const), used_names)
         sheets.append((c_title, headers, c_df))
         tab_counts[c_title] = int(len(c_df))
+
+    # CCMS Panels Tabs (if raw_panel_data is provided)
+    if raw_panel_data is not None and not raw_panel_data.df.empty:
+        p_full = raw_panel_data.full_df if not raw_panel_data.full_df.empty else raw_panel_data.df
+        p_headers = list(p_full.columns) if not p_full.empty else list(raw_panel_data.raw_headers)
+
+        # Tab: Panels Master Log
+        panels_master_title = _safe_sheet_title("Panels Master", used_names)
+        sheets.append((panels_master_title, p_headers, p_full))
+        tab_counts[panels_master_title] = int(len(p_full))
+
+        # Tab: Panels Summary (aggregated by Zone & Ward)
+        p_meta = raw_panel_data.df.copy()
+        has_sp = (
+            p_meta.get("switch_point_clean", pd.Series("", index=p_meta.index))
+            .astype(str)
+            .str.strip()
+            != ""
+        ).astype(int)
+        p_meta["_has_sp"] = has_sp
+
+        def _is_url(col_name: str) -> pd.Series:
+            if col_name not in p_meta.columns:
+                return pd.Series(0, index=p_meta.index)
+            s = p_meta[col_name].astype(str).str.strip().str.lower()
+            return s.str.startswith("http").astype(int)
+
+        p_meta["_has_ctrl_photo"] = _is_url("controller_photo")
+        p_summary_rows = (
+            p_meta.groupby(["zone", "ward"])
+            .agg(
+                Total_Panels=("panel_uid", "count"),
+                Circuits_Mapped=("_has_sp", "sum"),
+                Controller_Photos=("_has_ctrl_photo", "sum"),
+            )
+            .reset_index()
+            .rename(
+                columns={
+                    "zone": "Zone / Constituency",
+                    "ward": "Ward",
+                    "Total_Panels": "Total CCMS Panels",
+                    "Circuits_Mapped": "Circuits Mapped",
+                    "Controller_Photos": "Controller Photos Verified",
+                }
+            )
+        )
+        p_sum_headers = list(p_summary_rows.columns)
+        panels_sum_title = _safe_sheet_title("Panels Summary", used_names)
+        sheets.append((panels_sum_title, p_sum_headers, p_summary_rows))
+        tab_counts[panels_sum_title] = int(len(p_summary_rows))
+
+    xlsx_bytes = _build_shared_strings_xlsx(sheets)
+    return filename, xlsx_bytes, tab_counts
+
+
+def build_panel_standalone_excel_bytes(
+    raw_panel_data: RawPanelData,
+    panel_analysis: PanelAnalysis | None = None,
+    *,
+    reference_today: date | None = None,
+    target_date: date | None = None,
+) -> tuple[str, bytes, dict[str, int]]:
+    """Build a standalone .xlsx workbook for CCMS Panel installations."""
+    if raw_panel_data is None or raw_panel_data.df.empty:
+        raise ValueError("Cannot build Excel workbook: Panel data is empty.")
+
+    meta_df = raw_panel_data.df
+    full_df = raw_panel_data.full_df if not raw_panel_data.full_df.empty else meta_df
+    headers = list(full_df.columns) if not full_df.empty else list(raw_panel_data.raw_headers)
+
+    if target_date is not None:
+        target_dt = pd.Timestamp(target_date)
+    else:
+        target_dt = (
+            _pick_yesterday_target_dt(meta_df["install_dt"], reference_today=reference_today)
+            if raw_panel_data.has_dates
+            else pd.NaT
+        )
+
+    if pd.notna(target_dt):
+        dt_norm = meta_df["install_dt"].dt.normalize()
+        upto_mask = dt_norm.isna() | (dt_norm <= target_dt.normalize())
+        yesterday_mask = dt_norm == target_dt.normalize()
+        date_tag = target_dt.strftime("%d-%m-%Y")
+        yest_title_raw = f"Yesterday ({date_tag})"
+        filename = f"CCMS_Panels_Installations_{date_tag}.xlsx"
+    else:
+        upto_mask = pd.Series(True, index=meta_df.index)
+        yesterday_mask = pd.Series(False, index=meta_df.index)
+        yest_title_raw = "Yesterday Installed"
+        filename = "CCMS_Panels_Installations_Details.xlsx"
+
+    used_names: set[str] = set()
+    tab_counts: dict[str, int] = {}
+    sheets: list[tuple[str, list[str], pd.DataFrame]] = []
+
+    # 1. Panels Summary
+    p_meta = meta_df.loc[upto_mask].copy()
+    has_sp = (
+        p_meta.get("switch_point_clean", pd.Series("", index=p_meta.index))
+        .astype(str)
+        .str.strip()
+        != ""
+    ).astype(int)
+    p_meta["_has_sp"] = has_sp
+
+    def _is_url(col_name: str) -> pd.Series:
+        if col_name not in p_meta.columns:
+            return pd.Series(0, index=p_meta.index)
+        s = p_meta[col_name].astype(str).str.strip().str.lower()
+        return s.str.startswith("http").astype(int)
+
+    p_meta["_has_ctrl_photo"] = _is_url("controller_photo")
+    p_meta["_has_earth_photo"] = _is_url("earthing_photo")
+
+    p_summary_rows = (
+        p_meta.groupby(["zone", "ward"])
+        .agg(
+            Total_Panels=("panel_uid", "count"),
+            Circuits_Mapped=("_has_sp", "sum"),
+            Controller_Photos=("_has_ctrl_photo", "sum"),
+            Earthing_Photos=("_has_earth_photo", "sum"),
+        )
+        .reset_index()
+        .rename(
+            columns={
+                "zone": "Zone / Constituency",
+                "ward": "Ward",
+                "Total_Panels": "Total CCMS Panels",
+                "Circuits_Mapped": "Circuits Mapped",
+                "Controller_Photos": "Controller Photos Verified",
+                "Earthing_Photos": "Earthing Photos Verified",
+            }
+        )
+    )
+    p_sum_title = _safe_sheet_title("Panels Summary", used_names)
+    sheets.append((p_sum_title, list(p_summary_rows.columns), p_summary_rows))
+    tab_counts[p_sum_title] = int(len(p_summary_rows))
+
+    # 2. Yesterday's Panels
+    yest_title = _safe_sheet_title(yest_title_raw, used_names)
+    yest_df = full_df.loc[yesterday_mask]
+    sheets.append((yest_title, headers, yest_df))
+    tab_counts[yest_title] = int(len(yest_df))
+
+    # 3. Contractor Summary (if analysis available)
+    if panel_analysis and not panel_analysis.installer_summary.empty:
+        c_df = panel_analysis.installer_summary.copy()
+        c_title = _safe_sheet_title("Contractor Summary", used_names)
+        sheets.append((c_title, list(c_df.columns), c_df))
+        tab_counts[c_title] = int(len(c_df))
+
+    # 4..N Zone-level tabs
+    zone_order = (
+        p_meta["zone"]
+        .value_counts(sort=True, ascending=False)
+        .index.tolist()
+    )
+    for z in zone_order:
+        z_mask = meta_df["zone"] == z
+        z_df = full_df.loc[z_mask]
+        z_title = _safe_sheet_title(str(z), used_names)
+        sheets.append((z_title, headers, z_df))
+        tab_counts[z_title] = int(len(z_df))
+
+    # Last: Full Master Log
+    master_title = _safe_sheet_title("Panels Master", used_names)
+    sheets.append((master_title, headers, full_df))
+    tab_counts[master_title] = int(len(full_df))
 
     xlsx_bytes = _build_shared_strings_xlsx(sheets)
     return filename, xlsx_bytes, tab_counts

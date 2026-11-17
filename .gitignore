@@ -18,7 +18,11 @@ venv/
 .DS_Store
 Thumbs.db
 
-# Generated previews
+# Generated previews & scratch
 output/
+scratch/
+tests/ThingsBoard_Browser_Profile/
+tests/BBMP_Lamp_Export/
+tests/output/
 
 

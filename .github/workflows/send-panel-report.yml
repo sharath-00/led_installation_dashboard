@@ -1,0 +1,187 @@
+name: Send CCMS Panel Installation Mail Dashboard
+
+on:
+  # External webhook / API trigger:
+  # POST https://api.github.com/repos/<OWNER>/<REPO>/dispatches
+  # Body: {"event_type": "send-panel-report", "client_payload": {"dry_run": false, "target_date": "", "tab": "PANEL REPORT", "note": ""}}
+  repository_dispatch:
+    types: [send-panel-report]
+
+  # Manual / workflow dispatch trigger from GitHub Actions UI or GitHub CLI:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview HTML only without sending email"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      target_date:
+        description: "Optional target date (DD-MM-YYYY or YYYY-MM-DD, e.g. 14-11-2026)"
+        required: false
+        default: ""
+        type: string
+      tab:
+        description: "CCMS Panel Report worksheet tab name override"
+        required: false
+        default: "PANEL REPORT"
+        type: string
+      to:
+        description: "Optional comma-separated recipient override"
+        required: false
+        default: ""
+        type: string
+      cc:
+        description: "Optional comma-separated CC recipient override"
+        required: false
+        default: ""
+        type: string
+      note:
+        description: "Optional coordinator note"
+        required: false
+        default: ""
+        type: string
+      attach_csv:
+        description: "Attach Zone, Ward, Contractor & Quality CSV summaries"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      no_attach_excel:
+        description: "Skip attaching multi-tab CCMS Panel Excel workbook"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+ # Uncomment below for automatic daily scheduled run (09:15 AM IST = 03:45 UTC):
+  # schedule:
+  #   - cron: "4 5 3 * * *"
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Kolkata
+
+jobs:
+  send-panel-dashboard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+
+      - name: Prepare service account credentials
+        env:
+          SA_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python - << 'PY'
+          import os, pathlib, sys
+          sa = os.environ.get("SA_JSON", "").strip()
+          if not sa:
+              print("Error: GOOGLE_SERVICE_ACCOUNT_JSON secret is missing.", file=sys.stderr)
+              sys.exit(1)
+          pathlib.Path("service_account.json").write_text(sa, encoding="utf-8")
+          PY
+
+      - name: Run CCMS Panel Mail Dashboard
+        env:
+          GOOGLE_SERVICE_ACCOUNT_FILE: service_account.json
+          GOOGLE_SHEET_URL_OR_ID: ${{ secrets.GOOGLE_SHEET_URL_OR_ID }}
+          GOOGLE_PANEL_WORKSHEET: ${{ secrets.GOOGLE_PANEL_WORKSHEET }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USE_TLS: ${{ secrets.SMTP_USE_TLS }}
+          SMTP_SENDER_NAME: ${{ secrets.SMTP_SENDER_NAME }}
+          SMTP_SENDER_EMAIL: ${{ secrets.SMTP_SENDER_EMAIL }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          EMAIL_RECIPIENTS: ${{ secrets.EMAIL_PANEL_RECIPIENTS || secrets.EMAIL_RECIPIENTS }}
+          EMAIL_CC: ${{ secrets.EMAIL_PANEL_CC || secrets.EMAIL_CC }}
+          EMAIL_THREAD_ENABLED: ${{ secrets.EMAIL_THREAD_ENABLED }}
+          EMAIL_THREAD_ID: ${{ secrets.EMAIL_PANEL_THREAD_ID || secrets.EMAIL_THREAD_ID }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
+          DISPATCH_TARGET_DATE: ${{ github.event.inputs.target_date || github.event.client_payload.target_date || '' }}
+          DISPATCH_TAB: ${{ github.event.inputs.tab || github.event.client_payload.tab || 'PANEL REPORT' }}
+          DISPATCH_TO: ${{ github.event.inputs.to || github.event.client_payload.to || '' }}
+          DISPATCH_CC: ${{ github.event.inputs.cc || github.event.client_payload.cc || '' }}
+          DISPATCH_NOTE: ${{ github.event.inputs.note || github.event.client_payload.note || '' }}
+          DISPATCH_ATTACH_CSV: ${{ github.event.inputs.attach_csv || github.event.client_payload.attach_csv || 'false' }}
+          DISPATCH_NO_ATTACH_EXCEL: ${{ github.event.inputs.no_attach_excel || github.event.client_payload.no_attach_excel || 'false' }}
+          DISPATCH_SHEET: ${{ github.event.client_payload.sheet || '' }}
+        run: |
+          python - << 'PY'
+          import os, subprocess, sys
+
+          cmd = [sys.executable, "send_panel_report.py"]
+          if str(os.environ.get("DISPATCH_DRY_RUN", "")).strip().lower() in {"1", "true", "yes"}:
+              cmd.append("--dry-run")
+          if str(os.environ.get("DISPATCH_ATTACH_CSV", "")).strip().lower() in {"1", "true", "yes"}:
+              cmd.append("--attach-csv")
+          if str(os.environ.get("DISPATCH_NO_ATTACH_EXCEL", "")).strip().lower() in {"1", "true", "yes"}:
+              cmd.append("--no-attach-excel")
+
+          tab_val = os.environ.get("DISPATCH_TAB", "").strip()
+          if tab_val:
+              cmd.extend(["--tab", tab_val])
+
+          target_date_val = os.environ.get("DISPATCH_TARGET_DATE", "").strip()
+          if target_date_val:
+              cmd.extend(["--target-date", target_date_val])
+
+          to_val = os.environ.get("DISPATCH_TO", "").strip()
+          if to_val:
+              cmd.extend(["--to", to_val])
+
+          cc_val = os.environ.get("DISPATCH_CC", "").strip()
+          if cc_val:
+              cmd.extend(["--cc", cc_val])
+
+          note_val = os.environ.get("DISPATCH_NOTE", "").strip()
+          if note_val:
+              cmd.extend(["--note", note_val])
+
+          sheet_val = os.environ.get("DISPATCH_SHEET", "").strip()
+          if sheet_val:
+              cmd.extend(["--sheet", sheet_val])
+
+          print("Executing command:", " ".join(cmd))
+          raise SystemExit(subprocess.call(cmd))
+          PY
+
+      - name: Clean up service account file
+        if: always()
+        run: rm -f service_account.json
+
+      - name: Upload rendered HTML preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-mail-dashboard-html
+          path: output/latest_panel_mail_dashboard.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload Excel workbook
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-excel-workbook
+          path: output/*CCMS_Panels_Installations*.xlsx
+          if-no-files-found: ignore
+          retention-days: 14

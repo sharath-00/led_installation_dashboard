@@ -221,6 +221,15 @@ def filter_daily_tabs_upto(tab_names: list[str], cutoff_date: date | None = None
     return [item[2] for item in kept]
 
 
+def auto_pick_panel_tab(tab_names: list[str]) -> str:
+    """Locate the panel installation report tab (e.g. 'PANEL REPORT', 'Panel Report', 'Panel')."""
+    for t in tab_names:
+        low = t.strip().lower()
+        if "panel" in low:
+            return t
+    return ""
+
+
 def auto_pick_raw_tab(
     tab_names: list[str],
     overall_tab: str = "",
@@ -228,14 +237,17 @@ def auto_pick_raw_tab(
 ) -> str:
     """Locate the raw lamp log tab (e.g. 'Sheet2', 'Lamp Report', 'Raw Data')."""
     base_excluded = {t for t in (overall_tab, daily_tab) if t}
-    non_summary = [t for t in tab_names if t not in base_excluded and "lamp installed" not in t.lower()]
+    non_summary = [
+        t for t in tab_names
+        if t not in base_excluded and "lamp installed" not in t.lower() and "panel" not in t.lower()
+    ]
     for kw in ("sheet2", "lamp report", "raw", "log", "detail", "master", "data"):
         for t in non_summary:
             if kw in t.lower():
                 return t
 
     excluded = base_excluded | set(find_all_daily_tabs(tab_names, overall_tab))
-    candidates = [t for t in tab_names if t not in excluded]
+    candidates = [t for t in tab_names if t not in excluded and "panel" not in t.lower()]
     if candidates:
         return candidates[0]
     if non_summary:
@@ -453,8 +465,23 @@ def get_sample_grids() -> dict[str, list[list[str]]]:
         ["North", "Hebbal", "HEB-W64", "GBA-HEB-W064-P093", "Sanjaynagar", "Metal", "1", "Overhead", "LEV-0056-011", "Image 1", "Image 2", "", "SL LED", "56", "LEV", "01/26", "sunilmysore2", "29-04-2026", "", "13.0350", "77.5790"],
     ]
 
+    panel_grid = [
+        ["Region", "Zone", "Ward", "Panel UID", "Controller ID", "SwitchPointNo", "InstalledOn", "Time", "Installed By", "Location", "Latitude", "Longitude", "Panel Photo", "Controller/SC", "Earthing Photo"],
+        ["Bommanahali", "Bommanahali-Z1", "BMH-W206", "SSC107SM00001", "SALSS000290", "[\"W206-SP001\"]", "11/11/2026", "18:20:39", "manivel1.bbmp@contractor.io", "Avalahalii, JP Nagar 9th Phase, Bengaluru", "12.87112", "77.562955", "https://schnell-s3-image.s3.amazonaws.com/p1.jpg", "https://schnell-s3-image.s3.amazonaws.com/c1.jpg", "https://schnell-s3-image.s3.amazonaws.com/e1.jpg"],
+        ["Bommanahali", "Bommanahali-Z1", "BMH-W207", "SSC107SM00002", "SALSS000287", "[\"W207-SP002\"]", "11/11/2026", "17:10:33", "shridurgaenterprises.bbmp@contractor.io", "RBI Layout, Phase 7, JP Nagar, Bengaluru", "12.88863", "77.578761", "https://schnell-s3-image.s3.amazonaws.com/p2.jpg", "https://schnell-s3-image.s3.amazonaws.com/c2.jpg", "https://schnell-s3-image.s3.amazonaws.com/e2.jpg"],
+        ["EAST", "CVRamanNagar", "CVRN-W113", "SSC107SM00003", "SALSS000019", "[\"W113-SP010\"]", "11/11/2026", "12:37:31", "k2enterprises1.bbmp@contractor.io", "Indiranagar 100ft Rd, Bengaluru", "12.89018", "77.576915", "https://schnell-s3-image.s3.amazonaws.com/p3.jpg", "https://schnell-s3-image.s3.amazonaws.com/c3.jpg", "https://schnell-s3-image.s3.amazonaws.com/e3.jpg"],
+        ["EAST", "SarvagnaNagar", "SN-W82", "SSC107SM00004", "SALSS000020", "[\"W082-SP005\"]", "11/11/2026", "14:15:00", "akenterprises@gmail.com", "Kammanahalli Main Rd, Bengaluru", "13.0012", "77.6350", "https://schnell-s3-image.s3.amazonaws.com/p4.jpg", "https://schnell-s3-image.s3.amazonaws.com/c4.jpg", "https://schnell-s3-image.s3.amazonaws.com/e4.jpg"],
+        ["EAST", "ShivajiNagar", "SVJR-W117", "SSC107SM00005", "SALSS000021", "[\"W117-SP003\"]", "10/11/2026", "11:20:00", "lakshmidevielectricals1.bbmp@contractor.io", "Russell Market, Shivaji Nagar, Bengaluru", "12.9845", "77.6050", "https://schnell-s3-image.s3.amazonaws.com/p5.jpg", "https://schnell-s3-image.s3.amazonaws.com/c5.jpg", "https://schnell-s3-image.s3.amazonaws.com/e5.jpg"],
+        ["EAST", "ShanthiNagar", "SNTR-W167", "SSC107SM00006", "SALSS000022", "", "10/11/2026", "16:00:00", "shridurgaenterprises.bbmp@contractor.io", "Richmond Town, Bengaluru", "12.9610", "77.6010", "https://schnell-s3-image.s3.amazonaws.com/p6.jpg", "-", "-"],
+        ["EAST", "Hebbal", "HEB-W61", "SSC107SM00007", "SALSS000023", "[\"W061-SP001\"]", "09/11/2026", "10:30:00", "manivel1.bbmp@contractor.io", "RT Nagar Main Rd, Bengaluru", "13.0210", "77.5960", "https://schnell-s3-image.s3.amazonaws.com/p7.jpg", "https://schnell-s3-image.s3.amazonaws.com/c7.jpg", "https://schnell-s3-image.s3.amazonaws.com/e7.jpg"],
+        ["EAST", "PulakeshiNagar", "PN-W69", "SSC107SM00008", "SALSS000024", "[\"W069-SP004\"]", "08/11/2026", "15:40:00", "k2enterprises1.bbmp@contractor.io", "Frazer Town Mosque Rd, Bengaluru", "12.9980", "77.6120", "https://schnell-s3-image.s3.amazonaws.com/p8.jpg", "https://schnell-s3-image.s3.amazonaws.com/c8.jpg", "https://schnell-s3-image.s3.amazonaws.com/e8.jpg"],
+        ["Bommanahali", "Bommanahali-Z1", "BMH-W203", "SSC107SM00009", "SALSS000025", "[\"W203-SP012\"]", "05/11/2026", "13:20:00", "shridurgaenterprises.bbmp@contractor.io", "Begur Main Rd, Bengaluru", "12.8891", "77.6288", "https://schnell-s3-image.s3.amazonaws.com/p9.jpg", "https://schnell-s3-image.s3.amazonaws.com/c9.jpg", "https://schnell-s3-image.s3.amazonaws.com/e9.jpg"],
+        ["Bommanahali", "Bommanahali-Z1", "BMH-W210", "SSC107SM00010", "SALSS000026", "[\"W210-SP020\"]", "15/10/2026", "12:10:00", "akenterprises@gmail.com", "Silk Board Junction, Bengaluru", "12.9177", "77.6238", "https://schnell-s3-image.s3.amazonaws.com/p10.jpg", "https://schnell-s3-image.s3.amazonaws.com/c10.jpg", "https://schnell-s3-image.s3.amazonaws.com/e10.jpg"],
+    ]
+
     return {
         "Overall till - 11.11.2026": overall_grid,
         "11.11.26- Lamp Installed": daily_grid,
         "Sheet2": sheet2_grid,
+        "PANEL REPORT": panel_grid,
     }

@@ -48,12 +48,27 @@ NEUTRAL_THEME = {
     "cell_bg": "#f8fafc",
 }
 
+PANEL_THEME = {
+    "bar": "#0d9488",
+    "track": "#ccfbf1",
+    "value": "#0f766e",
+    "badge_bg": "#f0fdfa",
+    "badge_border": "#99f6e4",
+    "badge_text": "#115e59",
+    "card_border": "#5eead4",
+    "hdr_bg": "#f0fdfa",
+    "hdr_border": "#ccfbf1",
+    "cell_bg": "#f0fdfa",
+}
+
 
 def _theme_for_scope(scope: str) -> dict[str, str]:
     if scope == "yesterday":
         return YESTERDAY_THEME
     if scope == "cumulative":
         return CUMULATIVE_THEME
+    if scope == "panel":
+        return PANEL_THEME
     return NEUTRAL_THEME
 
 
@@ -65,6 +80,10 @@ def _scope_badge(scope: str, label: str | None = None) -> str:
     elif scope == "cumulative":
         t = CUMULATIVE_THEME
         txt = label or "Cumulative"
+        dot = f'<span style="color:{t["bar"]};">&#9679;</span> '
+    elif scope == "panel":
+        t = PANEL_THEME
+        txt = label or "CCMS Panel"
         dot = f'<span style="color:{t["bar"]};">&#9679;</span> '
     elif scope == "neutral":
         t = NEUTRAL_THEME
@@ -386,6 +405,241 @@ def _render_detailed_matrix_table(
     """
 
 
+def _kpi_card_html(title: str, val: str, sub: str, scope: str, badge_txt: str) -> str:
+    t = _theme_for_scope(scope)
+    val_color = t["value"] if scope in ("yesterday", "cumulative", "panel") else "#0f172a"
+    return (
+        f'<td width="198" valign="top" style="width:198px;background-color:#ffffff;border:1px solid {t["card_border"]};border-radius:12px;overflow:hidden;padding:0;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">'
+        f'<tr><td style="height:3px;background-color:{t["bar"]};font-size:1px;line-height:1px;">&nbsp;</td></tr>'
+        f'<tr><td style="padding:12px 15px 14px 15px;">'
+        f'<div style="padding-bottom:7px;">{_scope_badge(scope, badge_txt)}</div>'
+        f'<div style="font-size:11px;font-weight:600;color:#475569;">{title}</div>'
+        f'<div style="font-size:27px;font-weight:800;color:{val_color};margin-top:4px;line-height:1.15;">{val}</div>'
+        f'<div style="font-size:11px;color:#64748b;margin-top:5px;">{sub}</div>'
+        f'</td></tr>'
+        f'</table>'
+        f'</td>'
+    )
+
+
+def _render_panel_section_html(analysis: LedAnalysis) -> str:
+    p = analysis.panel_analysis
+    if p is None or p.kpis.total_panels == 0:
+        return ""
+
+    pk = p.kpis
+    t = PANEL_THEME
+
+    # Header card for Panel Infrastructure
+    header_html = f"""
+    <tr>
+      <td style="padding-top:28px;padding-bottom:4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#ffffff;border:1px solid {t['card_border']};border-radius:12px;overflow:hidden;border-collapse:separate;">
+          <tr>
+            <td style="height:4px;background-color:{t['bar']};font-size:1px;line-height:1px;">&nbsp;</td>
+          </tr>
+          <tr>
+            <td style="padding:14px 20px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td valign="top">
+                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:{t['bar']};margin-bottom:3px;">
+                      Infrastructure Component &bull; Feeder Control &amp; Monitoring
+                    </div>
+                    <h2 style="margin:0;font-size:18px;line-height:1.25;font-weight:800;color:#0f172a;">
+                      Smart CCMS Panel Installation Analytics
+                    </h2>
+                    <div style="font-size:12px;color:#64748b;margin-top:4px;">
+                      Feeder Pillar Controllers, Switch Point Mapping &amp; Field Quality Audits &bull; {pk.total_panels:,} Total Panels across {pk.wards_count} Wards ({pk.zones_count} Zones)
+                    </div>
+                  </td>
+                  <td align="right" valign="top" style="white-space:nowrap;padding-left:12px;">
+                    <span style="display:inline-block;padding:6px 12px;border-radius:8px;background-color:{t['badge_bg']};border:1px solid {t['badge_border']};font-size:11px;font-weight:700;color:{t['badge_text']};">
+                      <span style="color:{t['bar']};">&#9679;</span> {pk.total_panels:,} CCMS Panels Installed
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    """
+
+    # 4-Card Panel KPI strip
+    p_card1 = _kpi_card_html(
+        "Total CCMS Panels",
+        f"{pk.total_panels:,}",
+        f"{pk.wards_count} Wards &bull; {pk.zones_count} Zones",
+        scope="panel",
+        badge_txt="Cumulative",
+    )
+    p_card2 = _kpi_card_html(
+        f"Daily Panels ({pk.daily_date})" if pk.has_daily else "Recent Deployment",
+        f"+{pk.daily_panels:,}" if pk.has_daily else f"{pk.last_7_days_total:,}",
+        f"{pk.daily_wards_count} Wards Active" if pk.has_daily else f"Avg {pk.avg_7d_installed}/day (7d)",
+        scope="yesterday" if (pk.has_daily and pk.daily_panels > 0) else "panel",
+        badge_txt="Daily Installed" if pk.has_daily else "Last 7 Days",
+    )
+    p_card3 = _kpi_card_html(
+        "Switch Points Mapped",
+        f"{pk.switch_points_mapped_pct:.1f}%",
+        f"{pk.switch_points_mapped:,} of {pk.total_panels:,} Mapped",
+        scope="panel",
+        badge_txt="Circuit Mapped",
+    )
+    p_card4 = _kpi_card_html(
+        "Photo Audit Rate",
+        f"{pk.controller_photo_pct:.1f}%",
+        f"{pk.controller_photo_count:,} Verified Enclosures",
+        scope="panel",
+        badge_txt="Quality Verified",
+    )
+
+    kpi_strip_html = f"""
+    <tr>
+      <td style="padding-top:14px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;">
+          <tr>
+            {p_card1}
+            <td width="16" style="width:16px;font-size:1px;line-height:1px;">&nbsp;</td>
+            {p_card2}
+            <td width="16" style="width:16px;font-size:1px;line-height:1px;">&nbsp;</td>
+            {p_card3}
+            <td width="16" style="width:16px;font-size:1px;line-height:1px;">&nbsp;</td>
+            {p_card4}
+          </tr>
+        </table>
+      </td>
+    </tr>
+    """
+
+    # Row 1: Zone-wise Panel Summary (Left) & Top Wards with Lamps/Panel (Right)
+    zone_items = [
+        (
+            f"{r['Zone']} ({r['Region']})",
+            f"{int(r['Total Panels']):,} panels ({r['Share %']}%)",
+            int(r["Total Panels"]),
+            f"SP Mapped: {r['Mapping %']}% | {int(r['Wards'])} Wards",
+        )
+        for _, r in p.zone_summary.iterrows()
+    ]
+    zone_card = _card_inner(
+        "Zone-Wise CCMS Panel Deployment",
+        _pill_bars_html(
+            zone_items,
+            bar_color=t["bar"],
+            track_color=t["track"],
+            value_color=t["value"],
+        ),
+        scope="panel",
+    )
+
+    # Top Wards / Cross-Analytics
+    if not analysis.lamp_to_panel_summary.empty:
+        ltp = analysis.lamp_to_panel_summary.head(7)
+        ward_items = [
+            (
+                str(r["Ward"]),
+                f"{int(r['Panels Installed']):,} panels",
+                int(r["Panels Installed"]),
+                f"{int(r['Lamps Installed']):,} lamps &bull; {r['Lamps per Panel']} lamps/panel",
+            )
+            for _, r in ltp.iterrows()
+        ]
+        ward_title = "Top Wards by Panels & Lamp Density"
+    else:
+        ward_items = [
+            (
+                str(r["Ward"]),
+                f"{int(r['Total Panels']):,} panels",
+                int(r["Total Panels"]),
+                f"Zone: {r['Zone']} | SP Mapped: {r['Mapping %']}%",
+            )
+            for _, r in p.top_wards.head(7).iterrows()
+        ]
+        ward_title = "Top Wards by CCMS Panels"
+
+    ward_card = _card_inner(
+        ward_title,
+        _pill_bars_html(
+            ward_items,
+            bar_color=t["bar"],
+            track_color=t["track"],
+            value_color=t["value"],
+        ),
+        scope="panel",
+    )
+
+    panel_row1_html = _two_card_row(zone_card, ward_card, left_scope="panel", right_scope="panel")
+
+    # Row 2: Contractor Leaderboard (Left) & Quality Audits (Right)
+    inst_items = [
+        (
+            str(r["Contractor"]).split("@")[0],
+            f"{int(r['Total Panels']):,} ({r['Share %']}%)",
+            int(r["Total Panels"]),
+            f"Last: {r['Last Active']} | {int(r['Wards'])} Wards",
+        )
+        for _, r in p.installer_summary.head(7).iterrows()
+    ] if not p.installer_summary.empty else []
+
+    contractor_card = _card_inner(
+        "Panel Installation Contractors",
+        _pill_bars_html(
+            inst_items,
+            bar_color=t["bar"],
+            track_color=t["track"],
+            value_color=t["value"],
+            empty_msg="No contractor information in panel report.",
+        ),
+        scope="panel",
+    )
+
+    q_rows_html = "".join([
+        f"""<tr>
+          <td style="padding:6px 8px;font-size:11px;color:#334155;border-bottom:1px solid #f1f5f9;font-weight:600;">{escape(str(r['Audit Check']))}</td>
+          <td align="right" style="padding:6px 8px;font-size:11px;color:#0f172a;border-bottom:1px solid #f1f5f9;font-family:monospace;">{escape(str(r['Verified']))}</td>
+          <td align="right" style="padding:6px 8px;font-size:11px;color:{t['value']};border-bottom:1px solid #f1f5f9;font-weight:700;">{escape(str(r['Compliance %']))}</td>
+          <td align="center" style="padding:6px 8px;font-size:10px;border-bottom:1px solid #f1f5f9;">
+            <span style="display:inline-block;padding:2px 6px;border-radius:4px;background-color:{'#dcfce7' if 'Complete' in str(r['Status']) or 'Audited' in str(r['Status']) else '#fef3c7'};color:{'#15803d' if 'Complete' in str(r['Status']) or 'Audited' in str(r['Status']) else '#b45309'};font-weight:700;">{escape(str(r['Status']))}</span>
+          </td>
+        </tr>"""
+        for _, r in p.quality_summary.iterrows()
+    ])
+
+    quality_body = f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin-top:2px;">
+      <thead>
+        <tr style="background-color:#f8fafc;">
+          <th align="left" style="padding:6px 8px;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Audit Check</th>
+          <th align="right" style="padding:6px 8px;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Count</th>
+          <th align="right" style="padding:6px 8px;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Rate</th>
+          <th align="center" style="padding:6px 8px;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;border-bottom:1px solid #e2e8f0;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {q_rows_html}
+      </tbody>
+    </table>
+    <div style="font-size:10px;color:#94a3b8;margin-top:8px;padding-top:6px;border-top:1px dashed #e2e8f0;">
+      Field Quality Criteria: GPS coordinates, weather-proof outer enclosure, controller switch cells &amp; earthing resistance pit.
+    </div>
+    """
+
+    quality_card = _card_inner(
+        "Field Quality & Compliance Audits",
+        quality_body,
+        scope="panel",
+    )
+
+    panel_row2_html = _two_card_row(contractor_card, quality_card, left_scope="panel", right_scope="panel")
+
+    return header_html + kpi_strip_html + panel_row1_html + panel_row2_html
+
+
 def render_email_html(
     analysis: LedAnalysis,
     report_cfg: ReportConfig,
@@ -492,23 +746,6 @@ def render_email_html(
         card4_sub = f"{k.top_wattage_pct:.1f}% of total lamps"
         card4_scope = "cumulative"
         card4_badge = "Cumulative"
-
-    def _kpi_card_html(title: str, val: str, sub: str, scope: str, badge_txt: str) -> str:
-        t = _theme_for_scope(scope)
-        val_color = t["value"] if scope in ("yesterday", "cumulative") else "#0f172a"
-        return (
-            f'<td width="198" valign="top" style="width:198px;background-color:#ffffff;border:1px solid {t["card_border"]};border-radius:12px;overflow:hidden;padding:0;">'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">'
-            f'<tr><td style="height:3px;background-color:{t["bar"]};font-size:1px;line-height:1px;">&nbsp;</td></tr>'
-            f'<tr><td style="padding:12px 15px 14px 15px;">'
-            f'<div style="padding-bottom:7px;">{_scope_badge(scope, badge_txt)}</div>'
-            f'<div style="font-size:11px;font-weight:600;color:#475569;">{title}</div>'
-            f'<div style="font-size:27px;font-weight:800;color:{val_color};margin-top:4px;line-height:1.15;">{val}</div>'
-            f'<div style="font-size:11px;color:#64748b;margin-top:5px;">{sub}</div>'
-            f'</td></tr>'
-            f'</table>'
-            f'</td>'
-        )
 
     # Row 1: Daily 14-day Trend (or Yesterday by Wattage) + Yesterday by Constituency
     if k.has_history and not analysis.daily_history.empty:
@@ -861,6 +1098,8 @@ def render_email_html(
     )
     corp_matrix_row = f'<tr><td style="padding-top:16px;">{corp_matrix_html}</td></tr>' if corp_matrix_html else ""
 
+    panel_section_html = _render_panel_section_html(analysis)
+
     recon_note = (
         f"Reconciled ({k.overall_sheet_grand_total:,})"
         if k.overall_reconciled
@@ -958,6 +1197,8 @@ def render_email_html(
 
           {corp_matrix_row}
 
+          {panel_section_html}
+
           <tr>
             <td style="padding:18px 4px 4px 4px;text-align:center;">
               <div style="font-size:11px;color:#64748b;">
@@ -1022,4 +1263,30 @@ def render_email_plain_text(
             lines.append(
                 f"- {r['Corporation']}: {int(r['Total Lamps']):,} lamps ({r['Share %']}%){daily_part}"
             )
+
+    if analysis.panel_analysis:
+        p = analysis.panel_analysis
+        pk = p.kpis
+        lines.extend([
+            "",
+            "============================================================",
+            "SMART CCMS PANEL INFRASTRUCTURE SUMMARY",
+            "============================================================",
+            f"- Cumulative Installed: {pk.total_panels:,} panels",
+            f"- Coverage:             {pk.zones_count} Zones, {pk.wards_count} Wards",
+            f"- Mapped Circuits:      {pk.switch_points_mapped:,} / {pk.total_panels:,} panels ({pk.switch_points_mapped_pct:.1f}%)",
+            f"- Photo Audit Score:    Outer: {pk.panel_photo_pct:.1f}%, Controller: {pk.controller_photo_pct:.1f}%, Earthing: {pk.earthing_photo_pct:.1f}%",
+        ])
+        if pk.has_daily and pk.daily_panels > 0:
+            lines.append(f"- Installed Yesterday:  +{pk.daily_panels:,} panels across {pk.daily_wards_count} wards")
+        if pk.last_7_days_total > 0:
+            lines.append(f"- Last 7 Days:          {pk.last_7_days_total:,} panels (avg {pk.avg_7d_installed:.1f}/day)")
+
+        if not p.installer_summary.empty:
+            lines.extend(["", "TOP PANEL CONTRACTORS"])
+            for _, r in p.installer_summary.head(5).iterrows():
+                lines.append(
+                    f"- {r['Contractor']}: {int(r['Total Panels']):,} panels ({r['Share %']}%), {int(r['Wards'])} Wards, Last Active: {r['Last Active']}"
+                )
+
     return "\n".join(lines)

@@ -20,6 +20,7 @@ class GoogleSheetConfig:
     overall_worksheet: str = ""
     daily_worksheet: str = ""
     raw_worksheet: str = ""
+    panel_worksheet: str = ""
 
     def resolved_service_account_path(self) -> Path:
         p = Path(self.service_account_file)
@@ -104,6 +105,10 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         raw_worksheet=_env_or(
             "GOOGLE_RAW_WORKSHEET",
             gs_raw.get("raw_worksheet", ""),
+        ),
+        panel_worksheet=_env_or(
+            "GOOGLE_PANEL_WORKSHEET",
+            gs_raw.get("panel_worksheet", ""),
         ),
     )
 
