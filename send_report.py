@@ -10,11 +10,9 @@ import schedule
 
 from src.analytics import (
     analyze_led_sheets,
-    analyze_panel_data,
     build_parsed_sheets_from_raw,
     parse_date_sort_key,
     parse_led_matrix_grid,
-    parse_panel_sheet,
     parse_raw_lamp_sheet,
 )
 from src.config import BASE_DIR, load_config
@@ -22,7 +20,6 @@ from src.email_renderer import render_email_html, render_email_plain_text
 from src.excel_exporter import build_sheet2_excel_bytes
 from src.mailer import AttachmentPayload, format_subject, send_dashboard_email
 from src.sheets_client import (
-    auto_pick_panel_tab,
     auto_pick_raw_tab,
     auto_pick_tabs,
     extract_spreadsheet_id,
@@ -66,9 +63,6 @@ def run_once(args: argparse.Namespace) -> int:
     historical_daily_sheets = []
     raw_lamp_data = None
     raw_tab_name = ""
-    raw_panel_data = None
-    panel_analysis = None
-    panel_tab_name = ""
 
     if args.sample:
         sample = get_sample_grids()
@@ -81,11 +75,6 @@ def run_once(args: argparse.Namespace) -> int:
         if args.raw_tab is None or args.raw_tab.lower() != "none":
             raw_tab_name = "Sheet2"
             raw_lamp_data = parse_raw_lamp_sheet(sample["Sheet2"], raw_tab_name)
-        if (getattr(args, "panel_tab", None) is None or str(args.panel_tab).lower() != "none") and "PANEL REPORT" in sample:
-            panel_tab_name = "PANEL REPORT"
-            raw_panel_data = parse_panel_sheet(sample["PANEL REPORT"], panel_tab_name)
-            if raw_panel_data is not None:
-                panel_analysis = analyze_panel_data(raw_panel_data, target_date=target_date_obj)
     else:
         sa_path = cfg.google_sheet.resolved_service_account_path()
         explicit_overall = (args.overall_tab or "").strip() or cfg.google_sheet.overall_worksheet.strip()
@@ -177,34 +166,11 @@ def run_once(args: argparse.Namespace) -> int:
                 except Exception as exc:
                     print(f"Warning: Could not parse raw tab '{candidate_raw}': {exc}")
 
-        # Fetch CCMS Panel Report tab if available
-        if getattr(args, "panel_tab", None) is None or str(args.panel_tab).lower() != "none":
-            candidate_panel = (
-                (args.panel_tab.strip() if getattr(args, "panel_tab", None) else "")
-                or cfg.google_sheet.panel_worksheet.strip()
-                or auto_pick_panel_tab(all_tabs)
-            )
-            if candidate_panel and candidate_panel in all_tabs:
-                try:
-                    panel_grid, _, resolved_panel_tab, _ = fetch_raw_grid(
-                        sa_path,
-                        cfg.google_sheet.spreadsheet_id_or_url,
-                        candidate_panel,
-                    )
-                    parsed_panel = parse_panel_sheet(panel_grid, resolved_panel_tab)
-                    if parsed_panel is not None:
-                        raw_panel_data = parsed_panel
-                        panel_tab_name = resolved_panel_tab
-                        panel_analysis = analyze_panel_data(raw_panel_data, target_date=target_date_obj)
-                except Exception as exc:
-                    print(f"Warning: Could not parse panel tab '{candidate_panel}': {exc}")
-
     analysis = analyze_led_sheets(
         overall_parsed,
         daily_parsed,
         historical_daily_sheets=historical_daily_sheets,
         raw_lamp_data=raw_lamp_data,
-        panel_analysis=panel_analysis,
         top_wards_limit=cfg.report.top_wards_limit,
     )
     html_body = render_email_html(
@@ -248,21 +214,12 @@ def run_once(args: argparse.Namespace) -> int:
         print(f"Yesterday ({k.daily_date}): +{k.daily_total:,} lamps across {k.daily_wards_count} Wards")
     if k.has_installers:
         print(f"Installers (Installed By): {k.active_installers_today} active yesterday / {k.total_installers} overall")
-    if analysis.panel_analysis:
-        pk = analysis.panel_analysis.kpis
-        print(
-            f"CCMS Panels: {pk.total_panels:,} panels across {pk.zones_count} Zones, {pk.wards_count} Wards "
-            f"| Mapped: {pk.switch_points_mapped_pct:.1f}% | Photo Compliance: Controller {pk.controller_photo_pct:.1f}%, Earthing {pk.earthing_photo_pct:.1f}%"
-        )
-        if pk.has_daily:
-            print(f"Panels Installed Yesterday ({pk.daily_date}): +{pk.daily_panels:,} panels across {pk.daily_wards_count} Wards")
 
     attachments: list[tuple[str, AttachmentPayload]] = []
     if raw_lamp_data is not None and not args.no_attach_excel:
         excel_name, excel_bytes, tab_counts = build_sheet2_excel_bytes(
             raw_lamp_data,
             target_date=target_date_obj,
-            raw_panel_data=raw_panel_data,
         )
         save_excel_name = f"sample_{excel_name}" if args.sample else excel_name
         excel_out_path = BASE_DIR / "output" / save_excel_name
@@ -316,7 +273,6 @@ def main() -> int:
     parser.add_argument("--overall-tab", help="Override Overall cumulative worksheet tab name")
     parser.add_argument("--daily-tab", help="Override Daily installed worksheet tab name (pass 'none' to skip)")
     parser.add_argument("--raw-tab", help="Override Sheet2 raw log tab name for Installed By analytics (pass 'none' to skip)")
-    parser.add_argument("--panel-tab", help="Override CCMS Panel Report tab name (pass 'none' to skip)")
     parser.add_argument("--target-date", help="Optional target date (DD-MM-YYYY or YYYY-MM-DD) to run the report for (defaults to yesterday / latest date)")
     parser.add_argument("--note", default="", help="Optional coordinator note to include at the top of the mail")
     parser.add_argument("--sample", action="store_true", help="Use built-in sample LED snapshot instead of Google Sheets")
