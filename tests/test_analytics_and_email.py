@@ -516,6 +516,54 @@ class TestLedMatrixMailDashboard(unittest.TestCase):
         self.assertTrue(pd.isna(parsed.iloc[9]))
         self.assertTrue(pd.isna(parsed.iloc[10]))
 
+    def test_excel_installed_on_date_standardization(self) -> None:
+        import io
+        import openpyxl
+        from src.analytics import parse_panel_sheet, parse_raw_lamp_sheet
+        from src.excel_exporter import build_panel_standalone_excel_bytes, build_sheet2_excel_bytes
+
+        # Create lamp grid with mixed slashed & hyphenated dates
+        lamp_grid = [
+            ["Region", "Zone", "Ward", "Pole ID", "Location", "Pole Type", "Pole Arm", "Connection Type", "Lamp ID", "Photo", "", "", "Type", "Wattage", "Manufacturer", "Batch", "Installed By", "Installed On"],
+            ["East", "ShivajiNagar", "SVJR-W120", "P1", "Loc 1", "RCC", "1", "ABC", "L1", "Img1", "", "", "SL LED", "34", "LEV", "11/26", "team1", "11/04/2026"],
+            ["East", "ShivajiNagar", "SVJR-W120", "P2", "Loc 2", "RCC", "1", "ABC", "L2", "Img1", "", "", "SL LED", "34", "LEV", "11/26", "team1", "13-11-2026"],
+            ["East", "ShivajiNagar", "SVJR-W120", "P3", "Loc 3", "RCC", "1", "ABC", "L3", "Img1", "", "", "SL LED", "34", "LEV", "11/26", "team1", "02/14/2026"],
+        ]
+        raw_lamp = parse_raw_lamp_sheet(lamp_grid)
+        self.assertIsNotNone(raw_lamp)
+        assert raw_lamp is not None
+        _, xlsx_bytes, _ = build_sheet2_excel_bytes(raw_lamp, target_date=date(2026, 11, 13))
+
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes), data_only=True)
+        ws = wb["Overall Data"]
+        headers = [c.value for c in ws[1]]
+        date_col = headers.index("Installed On") + 1
+
+        # 11/04/2026 is November 4th -> must be formatted as 04-11-2026 (DD-MM-YYYY)
+        self.assertEqual(ws.cell(2, date_col).value, "04-11-2026")
+        # 13-11-2026 is November 13th -> must be formatted as 13-11-2026 (DD-MM-YYYY)
+        self.assertEqual(ws.cell(3, date_col).value, "13-11-2026")
+        # 02/14/2026 is February 14th -> must be formatted as 14-02-2026 (DD-MM-YYYY)
+        self.assertEqual(ws.cell(4, date_col).value, "14-02-2026")
+
+        # Create panel grid with mixed dates
+        panel_grid = [
+            ["Region", "Zone", "Ward", "Panel UID", "Controller ID", "SwitchPointNo", "InstalledOn", "Time", "Installed By", "Location", "Latitude", "Longitude", "Panel Photo", "Controller/SC", "Earthing Photo"],
+            ["EAST", "ShivajiNagar", "SVJR-W120", "P_UID_1", "CTRL_1", "SP1", "11/04/2026", "10:00:00", "c1", "Loc 1", "12.9", "77.6", "img", "img", "img"],
+            ["EAST", "ShivajiNagar", "SVJR-W120", "P_UID_2", "CTRL_2", "SP2", "13-11-2026", "11:00:00", "c2", "Loc 2", "12.9", "77.6", "img", "img", "img"],
+        ]
+        raw_panel = parse_panel_sheet(panel_grid)
+        self.assertIsNotNone(raw_panel)
+        assert raw_panel is not None
+        _, panel_xlsx_bytes, _ = build_panel_standalone_excel_bytes(raw_panel, target_date=date(2026, 11, 13))
+
+        wb_p = openpyxl.load_workbook(io.BytesIO(panel_xlsx_bytes), data_only=True)
+        ws_p = wb_p["Panels Master"]
+        p_headers = [c.value for c in ws_p[1]]
+        p_date_col = p_headers.index("InstalledOn") + 1
+
+        self.assertEqual(ws_p.cell(2, p_date_col).value, "04-11-2026")
+        self.assertEqual(ws_p.cell(3, p_date_col).value, "13-11-2026")
 
 
 if __name__ == "__main__":

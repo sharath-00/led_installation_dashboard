@@ -414,7 +414,7 @@ def parse_smart_install_date(series: pd.Series) -> pd.Series:
             except ValueError:
                 return pd.NaT
 
-        return pd.to_datetime(v, dayfirst=False, errors="coerce")
+        return pd.to_datetime(v, dayfirst=True, errors="coerce")
 
     return series.apply(_parse)
 
@@ -608,6 +608,13 @@ def parse_raw_lamp_sheet(grid: list[list[str]], tab_name: str = "Sheet2") -> Raw
     has_installed_by = bool(col_installed_by and (out["installed_by"] != "").any())
     has_dates = bool(out["install_dt"].notna().any())
 
+    # Standardize Installed On in full_df to clean DD-MM-YYYY format
+    if col_installed_on and col_installed_on in full_df.columns and has_dates:
+        formatted_dates = out["install_dt"].dt.strftime("%d-%m-%Y")
+        full_df[col_installed_on] = full_df[col_installed_on].where(
+            out["install_dt"].isna(), formatted_dates
+        )
+
     return RawLampData(
         tab_name=tab_name,
         df=out,
@@ -719,6 +726,20 @@ def parse_panel_sheet(grid: list[list[str]], tab_name: str = "PANEL REPORT") -> 
         )
     else:
         df_clean["switch_point_clean"] = ""
+
+    # Standardize InstalledOn in full_df to clean DD-MM-YYYY format
+    if has_dates:
+        col_installed_raw = None
+        for c in full_df.columns:
+            clow = str(c).lower().replace(" ", "").replace("_", "")
+            if "installedon" in clow or clow in ("installeddate", "date"):
+                col_installed_raw = c
+                break
+        if col_installed_raw:
+            formatted_dates = df_clean["install_dt"].dt.strftime("%d-%m-%Y")
+            full_df[col_installed_raw] = full_df[col_installed_raw].where(
+                df_clean["install_dt"].isna(), formatted_dates
+            )
 
     return RawPanelData(
         tab_name=tab_name,

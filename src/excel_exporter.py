@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
-from datetime import date
+from datetime import date, datetime
 from xml.sax.saxutils import escape as xml_escape
 
 import openpyxl
@@ -37,8 +37,14 @@ def _safe_sheet_title(name: str, used: set[str]) -> str:
 
 
 def _clean_xml_text(val: object) -> str:
-    if val is None:
+    if val is None or pd.isna(val):
         return ""
+    if isinstance(val, (datetime, pd.Timestamp)):
+        if getattr(val, "hour", 0) == 0 and getattr(val, "minute", 0) == 0 and getattr(val, "second", 0) == 0:
+            return val.strftime("%d-%m-%Y")
+        return val.strftime("%d-%m-%Y %H:%M:%S")
+    if isinstance(val, date):
+        return val.strftime("%d-%m-%Y")
     s = str(val)
     if s and _ILLEGAL_XML_CHARS.search(s):
         s = _ILLEGAL_XML_CHARS.sub("", s)
@@ -186,8 +192,17 @@ def build_sheet2_excel_bytes(
         raise ValueError("Cannot build Excel workbook: Sheet2 data is empty.")
 
     meta_df = raw_data.df
-    full_df = raw_data.full_df if not raw_data.full_df.empty else meta_df
+    full_df = (raw_data.full_df if not raw_data.full_df.empty else meta_df).copy()
     headers = list(full_df.columns) if not full_df.empty else list(raw_data.raw_headers)
+
+    # Standardize Installed On date column in full_df to clean DD-MM-YYYY format
+    if "install_dt" in meta_df.columns and meta_df["install_dt"].notna().any():
+        for c in full_df.columns:
+            clow = str(c).lower().replace(" ", "").replace("_", "")
+            if "installedon" in clow or clow in ("installdate", "installeddate"):
+                clean_dates = meta_df["install_dt"].dt.strftime("%d-%m-%Y")
+                full_df[c] = full_df[c].where(meta_df["install_dt"].isna(), clean_dates)
+                break
 
     if target_date is not None:
         target_dt = pd.Timestamp(target_date)
@@ -308,8 +323,17 @@ def build_panel_standalone_excel_bytes(
         raise ValueError("Cannot build Excel workbook: Panel data is empty.")
 
     meta_df = raw_panel_data.df
-    full_df = raw_panel_data.full_df if not raw_panel_data.full_df.empty else meta_df
+    full_df = (raw_panel_data.full_df if not raw_panel_data.full_df.empty else meta_df).copy()
     headers = list(full_df.columns) if not full_df.empty else list(raw_panel_data.raw_headers)
+
+    # Standardize Installed On date column in full_df to clean DD-MM-YYYY format
+    if "install_dt" in meta_df.columns and meta_df["install_dt"].notna().any():
+        for c in full_df.columns:
+            clow = str(c).lower().replace(" ", "").replace("_", "")
+            if "installedon" in clow or clow in ("installdate", "installeddate"):
+                clean_dates = meta_df["install_dt"].dt.strftime("%d-%m-%Y")
+                full_df[c] = full_df[c].where(meta_df["install_dt"].isna(), clean_dates)
+                break
 
     if target_date is not None:
         target_dt = pd.Timestamp(target_date)
